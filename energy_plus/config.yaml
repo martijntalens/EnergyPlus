@@ -2,7 +2,7 @@ name: Energie+
 version: "0.1.0"
 slug: energy_plus
 description: Extra, more detailed energy dashboard next to the built-in Energy dashboard
-url: https://github.com/<your-account>/ha-energy-plus
+url: https://github.com/martijntalens/EnergyPlus
 arch:
   - aarch64
   - amd64

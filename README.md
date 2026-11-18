@@ -10,11 +10,9 @@ Energy dashboard and reuses its configuration; nothing is replaced or changed.
 
 ### Option A — via a GitHub repository (recommended)
 
-1. Push this folder to a GitHub repository and replace `<your-account>` in
-   `repository.yaml` and `energy_plus/config.yaml`.
-2. In Home Assistant: **Settings → Apps (Add-ons) → App store → ⋮ → Repositories**, add the
-   repository URL.
-3. Install **Energie+**, start it and enable **Show in sidebar**.
+1. In Home Assistant: **Settings → Apps (Add-ons) → App store → ⋮ → Repositories**, add
+   `https://github.com/martijntalens/EnergyPlus`.
+2. Install **Energie+**, start it and enable **Show in sidebar**.
 
 ### Option B — local app
 
