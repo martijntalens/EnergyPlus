@@ -1,0 +1,21 @@
+configuration:
+  grid_power_entity:
+    name: Grid power sensor (W)
+    description: Optional. Live grid power. Positive = import, negative = export (unless a separate export sensor is set). Leave empty to use the power sensors from the Energy dashboard settings.
+  grid_power_export_entity:
+    name: Grid export power sensor (W)
+    description: Optional. Separate export power sensor, e.g. the DSMR/P1 "power production" sensor.
+  solar_power_entity:
+    name: Solar power sensor (W)
+    description: Optional. Live solar production.
+  battery_power_entity:
+    name: Battery power sensor (W)
+    description: Optional. Positive = discharging, negative = charging.
+  battery_soc_entity:
+    name: Battery state of charge (%)
+    description: Optional.
+  co2_signal_entity:
+    name: Fossil fuel percentage sensor
+    description: Optional. E.g. the Electricity Maps "grid fossil fuel percentage" sensor. Auto-detected when empty.
+  live_refresh_seconds:
+    name: Live refresh interval (seconds)

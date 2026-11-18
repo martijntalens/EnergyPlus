@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Energie+</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="vendor/echarts.min.js"></script>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <svg class="brand-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4.5 13.5H11L10 22l8.5-11.5H12L13 2Z"/></svg>
+        <div>
+          <h1>Energie<span>+</span></h1>
+          <div class="sub" id="location">Gedetailleerd energie-inzicht</div>
+        </div>
+        <span class="badge" id="demo-badge" hidden>Demo-data</span>
+      </div>
+
+      <div class="controls">
+        <div class="seg" role="tablist" aria-label="Periode">
+          <button role="tab" data-period="day">Dag</button>
+          <button role="tab" data-period="week">Week</button>
+          <button role="tab" data-period="month">Maand</button>
+          <button role="tab" data-period="year">Jaar</button>
+        </div>
+        <div class="nav">
+          <button class="icon-btn" id="prev" aria-label="Vorige periode">‹</button>
+          <div class="period-label" id="period-label">…</div>
+          <button class="icon-btn" id="next" aria-label="Volgende periode">›</button>
+          <button class="ghost-btn" id="today">Nu</button>
+        </div>
+        <label class="switch" title="Vergelijk met de vorige periode">
+          <input type="checkbox" id="compare" checked />
+          <span class="track"><span class="thumb"></span></span>
+          <span>Vergelijk</span>
+        </label>
+        <button class="icon-btn" id="refresh" aria-label="Verversen" title="Verversen"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="icon-btn" id="theme" aria-label="Licht/donker wisselen" title="Licht/donker"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17Z" fill="currentColor"/></svg></button>
+      </div>
+    </header>
+
+    <div class="banner" id="banner" hidden></div>
+
+    <main>
+      <section class="kpis" id="kpis" aria-label="Kerncijfers"></section>
+
+      <section class="grid">
+        <article class="card span-5" id="card-live" hidden>
+          <header><h2>Live energiestroom</h2><span class="hint" id="live-updated"></span></header>
+          <div id="live-flow" class="live-flow"></div>
+        </article>
+
+        <article class="card span-7" id="card-sankey">
+          <header>
+            <h2>Waar komt je energie vandaan — en waar gaat het heen?</h2>
+          </header>
+          <div class="chart" id="chart-sankey" style="height:380px"></div>
+        </article>
+
+        <article class="card span-12" id="card-balance">
+          <header>
+            <h2>Energiebalans</h2>
+            <div class="card-actions">
+              <div class="seg small" data-view-for="balance">
+                <button data-view="chart" class="active">Grafiek</button>
+                <button data-view="table">Tabel</button>
+              </div>
+              <button class="ghost-btn small" id="csv">CSV</button>
+            </div>
+          </header>
+          <p class="card-sub">Boven de nullijn: waar je verbruik vandaan kwam. Onder de nullijn: teruglevering en batterij laden.</p>
+          <div class="chart" id="chart-balance" style="height:340px"></div>
+          <div class="table-wrap" id="table-balance" hidden></div>
+        </article>
+
+        <article class="card span-6" id="card-devices">
+          <header>
+            <h2>Verbruikers</h2>
+            <div class="seg small" data-view-for="devices">
+              <button data-view="list" class="active">Ranglijst</button>
+              <button data-view="chart">Verloop</button>
+            </div>
+          </header>
+          <div id="device-list" class="device-list"></div>
+          <div class="chart" id="chart-devices" style="height:320px" hidden></div>
+        </article>
+
+        <article class="card span-6" id="card-solar">
+          <header><h2>Zonnepanelen</h2></header>
+          <div class="mini-stats" id="solar-stats"></div>
+          <div class="chart" id="chart-solar" style="height:260px"></div>
+        </article>
+
+        <article class="card span-6" id="card-costs">
+          <header><h2>Kosten</h2></header>
+          <div class="mini-stats" id="cost-stats"></div>
+          <div class="chart" id="chart-costs" style="height:240px"></div>
+        </article>
+
+        <article class="card span-6" id="card-price">
+          <header><h2>Gemiddelde stroomprijs</h2></header>
+          <p class="card-sub">Wat je per kWh van het net gemiddeld betaalde — handig bij een dynamisch contract.</p>
+          <div class="chart" id="chart-price" style="height:200px"></div>
+          <div id="tariff-split" class="tariff-split"></div>
+        </article>
+
+        <article class="card span-7" id="card-profile">
+          <header><h2>Verbruiksprofiel</h2><span class="hint">Gemiddeld vermogen per uur en weekdag, laatste 4 weken</span></header>
+          <div class="chart" id="chart-profile" style="height:280px"></div>
+        </article>
+
+        <article class="card span-5" id="card-insights">
+          <header><h2>Inzichten</h2></header>
+          <ul class="insights" id="insights"></ul>
+        </article>
+
+        <article class="card span-6" id="card-gas">
+          <header><h2>Gas</h2></header>
+          <div class="mini-stats" id="gas-stats"></div>
+          <div class="chart" id="chart-gas" style="height:220px"></div>
+        </article>
+
+        <article class="card span-6" id="card-water">
+          <header><h2>Water</h2></header>
+          <div class="mini-stats" id="water-stats"></div>
+          <div class="chart" id="chart-water" style="height:220px"></div>
+        </article>
+
+        <article class="card span-12" id="card-calendar">
+          <header><h2>Jaaroverzicht verbruik</h2><span class="hint">Klik op een dag om die te openen</span></header>
+          <div class="chart" id="chart-calendar" style="height:210px"></div>
+        </article>
+      </section>
+    </main>
+
+    <footer class="foot">Energie+ · Een extra kijk op de data van je Home Assistant Energie-dashboard · alleen-lezen</footer>
+  </div>
+
+  <div class="loading" id="loading"><div class="spinner"></div></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

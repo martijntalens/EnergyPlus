@@ -1,0 +1,21 @@
+configuration:
+  grid_power_entity:
+    name: Vermogenssensor net (W)
+    description: Optioneel. Live netvermogen. Positief = afname, negatief = teruglevering (tenzij een aparte terugleversensor is ingesteld). Leeg = vermogenssensoren uit de instellingen van het Energie-dashboard gebruiken.
+  grid_power_export_entity:
+    name: Vermogenssensor teruglevering (W)
+    description: Optioneel. Aparte terugleversensor, bijv. de DSMR/P1-sensor "power production".
+  solar_power_entity:
+    name: Vermogenssensor zonnepanelen (W)
+    description: Optioneel. Live opwek van de zonnepanelen.
+  battery_power_entity:
+    name: Vermogenssensor thuisbatterij (W)
+    description: Optioneel. Positief = ontladen, negatief = laden.
+  battery_soc_entity:
+    name: Laadniveau thuisbatterij (%)
+    description: Optioneel.
+  co2_signal_entity:
+    name: Sensor percentage fossiele brandstof
+    description: Optioneel. Bijv. de Electricity Maps-sensor "grid fossil fuel percentage". Wordt automatisch gezocht als dit leeg is.
+  live_refresh_seconds:
+    name: Verversinterval live-weergave (seconden)
