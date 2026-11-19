@@ -1,4 +1,4 @@
-// Demo mode: a deterministic, synthetic Dutch household (gas + solar + battery + EV).
+// Demo mode: a deterministic, synthetic Dutch household (gas + solar, no battery, no EV charging).
 // Used when the page is opened outside Home Assistant or with ?demo in the URL.
 // Mimics the subset of the HA WebSocket API that Energie+ uses.
 
@@ -17,8 +17,9 @@ function mulberry(seed) {
   };
 }
 
+const HAS_BATTERY = false;
 const DEVICES = [
-  { id: "sensor.demo_laadpaal_energy", name: "Laadpaal" },
+  { id: "sensor.demo_tv_energy", name: "Tv & media" },
   { id: "sensor.demo_wasmachine_energy", name: "Wasmachine" },
   { id: "sensor.demo_droger_energy", name: "Wasdroger" },
   { id: "sensor.demo_vaatwasser_energy", name: "Vaatwasser" },
@@ -72,12 +73,8 @@ function simulateDay(y, m, d) {
     dev["sensor.demo_wasmachine_energy"] = washDay && h === washHour ? 0.65 : washDay && h === washHour + 1 ? 0.25 : 0.001;
     dev["sensor.demo_droger_energy"] = dryer && (h === washHour + 2 || h === washHour + 3) ? 0.95 : 0.001;
     dev["sensor.demo_vaatwasser_energy"] = h === 20 ? 0.85 : h === 21 ? 0.2 : 0.001;
-    let ev = 0;
-    if (evDay && h >= evStart) {
-      const done = Math.max(0, (h - evStart) * (evSolar ? 3.6 : 7.4));
-      ev = Math.max(0, Math.min(evSolar ? 3.6 : 7.4, evKwh - done));
-    }
-    dev["sensor.demo_laadpaal_energy"] = ev;
+    const ev = 0;
+    dev["sensor.demo_tv_energy"] = h >= 19 && h <= 22 ? 0.11 + rh() * 0.04 : weekend && h >= 13 && h < 19 ? 0.08 : 0.006;
     let untracked = 0.11 + rh() * 0.05;
     if (h === 7) untracked += 0.25;
     if (h === 17 || h === 18) untracked += 0.45 + rh() * 0.3;
@@ -90,7 +87,10 @@ function simulateDay(y, m, d) {
 
     let fromGrid = 0, toGrid = 0, batIn = 0, batOut = 0;
     const surplus = solar - home;
-    if (surplus > 0) {
+    if (!HAS_BATTERY) {
+      if (surplus > 0) toGrid = surplus;
+      else fromGrid = -surplus;
+    } else if (surplus > 0) {
       batIn = Math.min(surplus, BAT_MAX, (BAT_CAP - soc) / BAT_EFF);
       soc += batIn * BAT_EFF;
       toGrid = surplus - batIn;
@@ -144,10 +144,10 @@ const EXTRACT = {
 for (const d of DEVICES) EXTRACT[d.id] = (h) => h.dev[d.id];
 
 const NAMES = {
-  "sensor.demo_import_t1": ["Stroomafname tarief 1 (dal)", "kWh"],
-  "sensor.demo_import_t2": ["Stroomafname tarief 2 (normaal)", "kWh"],
-  "sensor.demo_export_t1": ["Teruglevering tarief 1 (dal)", "kWh"],
-  "sensor.demo_export_t2": ["Teruglevering tarief 2 (normaal)", "kWh"],
+  "sensor.demo_import_t1": ["Electricity Meter Energy Consumption (tarif 1)", "kWh"],
+  "sensor.demo_import_t2": ["Electricity Meter Energy Consumption (tarif 2)", "kWh"],
+  "sensor.demo_export_t1": ["Electricity Meter Energy Production (tarif 1)", "kWh"],
+  "sensor.demo_export_t2": ["Electricity Meter Energy Production (tarif 2)", "kWh"],
   "sensor.demo_solar_energy": ["Zonnepanelen opbrengst", "kWh"],
   "sensor.demo_battery_in": ["Thuisbatterij geladen", "kWh"],
   "sensor.demo_battery_out": ["Thuisbatterij ontladen", "kWh"],
@@ -194,10 +194,17 @@ export function createDemoApi() {
       grid_power_entity: "sensor.demo_grid_power",
       grid_power_export_entity: "",
       solar_power_entity: "sensor.demo_solar_power",
-      battery_power_entity: "sensor.demo_battery_power",
-      battery_soc_entity: "sensor.demo_battery_soc",
+      battery_power_entity: "",
+      battery_soc_entity: "",
       co2_signal_entity: "sensor.demo_fossil_fuel_percentage",
       live_refresh_seconds: 3,
+      household_size: 3,
+      device_power_entities: [],
+    },
+    async devicePower(ids) {
+      const out = {};
+      for (const id of ids) if (EXTRACT[id]) out[id] = id.replace(/_energy$/, "_power");
+      return out;
     },
     async autodetect() {
       return { co2_signal_entity: "sensor.demo_fossil_fuel_percentage" };
@@ -213,6 +220,7 @@ export function createDemoApi() {
         "sensor.demo_battery_soc": rec.soc.toFixed(0),
       };
       const units = { "sensor.demo_battery_soc": "%" };
+      for (const d of DEVICES) vals[d.id.replace(/_energy$/, "_power")] = (rec.dev[d.id] * 1000 * jitter()).toFixed(0);
       const out = {};
       for (const id of ids) out[id] = id in vals ? { state: vals[id], unit: units[id] || "W", name: id } : null;
       return out;
@@ -237,7 +245,7 @@ export function createDemoApi() {
                 cost_adjustment_day: 0,
               },
               { type: "solar", stat_energy_from: "sensor.demo_solar_energy", config_entry_solar_forecast: ["demo_forecast"] },
-              { type: "battery", stat_energy_from: "sensor.demo_battery_out", stat_energy_to: "sensor.demo_battery_in" },
+              ...(HAS_BATTERY ? [{ type: "battery", stat_energy_from: "sensor.demo_battery_out", stat_energy_to: "sensor.demo_battery_in" }] : []),
               { type: "gas", stat_energy_from: "sensor.demo_gas", stat_cost: "sensor.demo_gas_cost" },
               { type: "water", stat_energy_from: "sensor.demo_water", stat_cost: "sensor.demo_water_cost" },
             ],

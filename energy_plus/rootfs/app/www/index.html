@@ -48,12 +48,12 @@
       <section class="kpis" id="kpis" aria-label="Kerncijfers"></section>
 
       <section class="grid">
-        <article class="card span-5" id="card-live" hidden>
+        <article class="card span-12" id="card-live" hidden>
           <header><h2>Live energiestroom</h2><span class="hint" id="live-updated"></span></header>
           <div id="live-flow" class="live-flow"></div>
         </article>
 
-        <article class="card span-7" id="card-sankey">
+        <article class="card span-12" id="card-sankey">
           <header>
             <h2>Waar komt je energie vandaan — en waar gaat het heen?</h2>
           </header>
@@ -71,7 +71,7 @@
               <button class="ghost-btn small" id="csv">CSV</button>
             </div>
           </header>
-          <p class="card-sub">Boven de nullijn: waar je verbruik vandaan kwam. Onder de nullijn: teruglevering en batterij laden.</p>
+          <p class="card-sub" id="balance-sub">Boven de nullijn: waar je verbruik vandaan kwam. Onder de nullijn: teruglevering.</p>
           <div class="chart" id="chart-balance" style="height:340px"></div>
           <div class="table-wrap" id="table-balance" hidden></div>
         </article>
@@ -79,6 +79,7 @@
         <article class="card span-6" id="card-devices">
           <header>
             <h2>Verbruikers</h2>
+            <span class="hint" id="device-cost-hint"></span>
             <div class="seg small" data-view-for="devices">
               <button data-view="list" class="active">Ranglijst</button>
               <button data-view="chart">Verloop</button>
@@ -100,21 +101,21 @@
           <div class="chart" id="chart-costs" style="height:240px"></div>
         </article>
 
-        <article class="card span-6" id="card-price">
-          <header><h2>Gemiddelde stroomprijs</h2></header>
-          <p class="card-sub">Wat je per kWh van het net gemiddeld betaalde — handig bij een dynamisch contract.</p>
-          <div class="chart" id="chart-price" style="height:200px"></div>
-          <div id="tariff-split" class="tariff-split"></div>
+        <article class="card span-6" id="card-tariff">
+          <header><h2>Dal- en piektarief</h2></header>
+          <p class="card-sub">Afname en teruglevering per telwerk: tarief 1 = dal, tarief 2 = piek.</p>
+          <div id="tariff-table" class="table-wrap"></div>
+          <div class="chart" id="chart-tariff" style="height:220px"></div>
         </article>
 
-        <article class="card span-7" id="card-profile">
-          <header><h2>Verbruiksprofiel</h2><span class="hint">Gemiddeld vermogen per uur en weekdag, laatste 4 weken</span></header>
-          <div class="chart" id="chart-profile" style="height:280px"></div>
-        </article>
-
-        <article class="card span-5" id="card-insights">
+        <article class="card span-7" id="card-insights">
           <header><h2>Inzichten</h2></header>
           <ul class="insights" id="insights"></ul>
+        </article>
+
+        <article class="card span-5" id="card-facts">
+          <header><h2>Leuke feitjes</h2><span class="hint">Indicatief, afgeronde vuistregels</span></header>
+          <ul class="facts" id="facts"></ul>
         </article>
 
         <article class="card span-6" id="card-gas">

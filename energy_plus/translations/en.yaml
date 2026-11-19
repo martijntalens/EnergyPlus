@@ -19,3 +19,9 @@ configuration:
     description: Optional. E.g. the Electricity Maps "grid fossil fuel percentage" sensor. Auto-detected when empty.
   live_refresh_seconds:
     name: Live refresh interval (seconds)
+  household_size:
+    name: Household size
+    description: Optional. Number of people, used to compare water use per person (0 = unknown).
+  device_power_entities:
+    name: Device power sensors
+    description: Optional. Only needed when a device's power sensor is not found automatically. One line per device: energy_sensor=power_sensor, e.g. sensor.washer_energy=sensor.washer_power

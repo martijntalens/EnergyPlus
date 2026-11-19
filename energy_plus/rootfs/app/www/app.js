@@ -159,6 +159,8 @@ function realApi(boot) {
       fetch("api/ws", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(msg) }).then(json),
     states: (ids) => fetch(`api/states?ids=${encodeURIComponent(ids.join(","))}`).then(json),
     autodetect: () => fetch("api/autodetect").then(json),
+    devicePower: (ids) =>
+      fetch("api/device_power", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) }).then(json),
   };
 }
 
@@ -183,7 +185,14 @@ function buildModel(prefs, info) {
       const froms = [...(src.flow_from || [])], tos = [...(src.flow_to || [])];
       if (src.stat_energy_from) froms.push(src);
       if (src.stat_energy_to) tos.push(src);
-      for (const f of froms) if (f.stat_energy_from) m.gridIn.push({ id: f.stat_energy_from, cost: costOf(f.stat_cost, f.stat_energy_from) });
+      for (const f of froms)
+        if (f.stat_energy_from)
+          m.gridIn.push({
+            id: f.stat_energy_from,
+            cost: costOf(f.stat_cost, f.stat_energy_from),
+            fixedPrice: typeof f.number_energy_price === "number" ? f.number_energy_price : null,
+            priceEntity: f.entity_energy_price || null,
+          });
       for (const t of tos) if (t.stat_energy_to) m.gridOut.push({ id: t.stat_energy_to, comp: costOf(t.stat_compensation, t.stat_energy_to) });
       m.rates.grid.push(...findKeys(src, "stat_rate"));
     } else if (src.type === "solar" && src.stat_energy_from) {
@@ -203,7 +212,7 @@ function buildModel(prefs, info) {
   for (const d of prefs?.device_consumption || []) {
     if (!d.stat_consumption || devIds.has(d.stat_consumption)) continue;
     devIds.add(d.stat_consumption);
-    m.devices.push({ id: d.stat_consumption, name: d.name || null, parent: d.included_in_stat || null });
+    m.devices.push({ id: d.stat_consumption, name: d.name || null, parent: d.included_in_stat || null, rate: d.stat_rate || null });
   }
   for (const d of m.devices) if (d.parent && !devIds.has(d.parent)) d.parent = null;
   m.devices.forEach((d, i) => (d.slot = i < 8 ? `--d${i + 1}` : "--other"));
@@ -222,14 +231,67 @@ function buildModel(prefs, info) {
   return m;
 }
 
+/* ---------- Tariffs: tarief 1 = dal, tarief 2 = piek (Dutch meters) ---------- */
+const TARIFF_LABEL = { dal: "Daltarief", piek: "Piektarief", enkel: "Enkel tarief" };
+function classifyTariff(id, name, index, count) {
+  if (count < 2) return "enkel";
+  const t = `${id} ${name || ""}`.toLowerCase();
+  if (/off[ _-]?peak|\blow\b|_low|laag|\bdal|tarif+[ _-]?1\b|tariff[ _-]?1\b|\bt1\b|_t1\b|_1$/.test(t)) return "dal";
+  if (/peak|\bhigh\b|_high|hoog|normaal|normal|piek|tarif+[ _-]?2\b|tariff[ _-]?2\b|\bt2\b|_t2\b|_2$/.test(t)) return "piek";
+  return index === 0 ? "dal" : index === 1 ? "piek" : `t${index + 1}`;
+}
+function classifyTariffs(m) {
+  m.gridIn.forEach((g, i) => (g.tariff = classifyTariff(g.id, meta[g.id]?.name, i, m.gridIn.length)));
+  m.gridOut.forEach((g, i) => (g.tariff = classifyTariff(g.id, meta[g.id]?.name, i, m.gridOut.length)));
+  m.tariffKeys = [...new Set([...m.gridIn, ...m.gridOut].map((g) => g.tariff))];
+}
+const tariffLabel = (k) => TARIFF_LABEL[k] || k.toUpperCase();
+/** Shares of each tariff in a record (by which meter moved; else the usual NL schedule). */
+function tariffWeights(r, hourly) {
+  const w = {};
+  const from = (map, list) => {
+    let tot = 0;
+    for (const g of list) tot += clamp0(map[g.id] || 0);
+    if (tot <= 1e-4) return false;
+    for (const g of list) w[g.tariff] = (w[g.tariff] || 0) + clamp0(map[g.id] || 0) / tot;
+    return true;
+  };
+  if (from(r.tariffIn, model.gridIn) || from(r.tariffOut, model.gridOut)) return w;
+  const keys = model.tariffKeys || [];
+  if (keys.length === 1) return { [keys[0]]: 1 };
+  if (keys.includes("dal") && keys.includes("piek")) {
+    const d = new Date(r.ts), dow = d.getDay(), weekend = dow === 0 || dow === 6;
+    const dalShare = weekend ? 1 : hourly ? (d.getHours() < 7 || d.getHours() >= 23 ? 1 : 0) : 8 / 24;
+    return { dal: dalShare, piek: 1 - dalShare };
+  }
+  return w;
+}
+/** Price per kWh for each tariff: fixed price from the Energy settings, else derived from the cost statistics. */
+function tariffPrices(records) {
+  const prices = {}, kwh = {}, cost = {};
+  for (const g of model.gridIn) {
+    if (g.fixedPrice != null) prices[g.tariff] = g.fixedPrice;
+    else if (livePrices[g.priceEntity] != null) prices[g.tariff] = livePrices[g.priceEntity];
+  }
+  for (const r of records)
+    for (const g of model.gridIn) {
+      kwh[g.tariff] = (kwh[g.tariff] || 0) + clamp0(r.tariffIn[g.id] || 0);
+      cost[g.tariff] = (cost[g.tariff] || 0) + (r.costIn[g.id] || 0);
+    }
+  for (const k of Object.keys(kwh)) if (prices[k] == null && kwh[k] > 0.05 && cost[k] > 0) prices[k] = cost[k] / kwh[k];
+  return prices;
+}
+const SHIFTABLE = /was|droger|droog|vaatwas|dish|wash|dryer|boiler/i;
+
 /* =========================================================================
  * Calculations
  * ========================================================================= */
 const NUM_FIELDS = [
   "fromGrid", "toGrid", "solar", "batIn", "batOut", "cost", "comp", "gas", "gasCost", "water", "waterCost",
   "home", "solarToHome", "solarToBat", "solarToGrid", "gridToHome", "gridToBat", "batToHome", "batToGrid",
+  "homeCost", "shiftPiek",
 ];
-const MAP_FIELDS = ["dev", "tariffIn", "tariffOut"];
+const MAP_FIELDS = ["dev", "devCost", "tariffIn", "tariffOut", "costIn", "compOut", "homeTariff"];
 const emptyAgg = () => {
   const o = { n: 0 };
   for (const k of NUM_FIELDS) o[k] = 0;
@@ -275,11 +337,11 @@ function compute(model, raw, bucketStarts, cutoff = Infinity) {
   };
   for (const g of model.gridIn) {
     add(g.id, (r, v) => ((r.fromGrid += v), (r.tariffIn[g.id] = (r.tariffIn[g.id] || 0) + v)));
-    add(g.cost, (r, v) => (r.cost += v));
+    add(g.cost, (r, v) => ((r.cost += v), (r.costIn[g.id] = (r.costIn[g.id] || 0) + v)));
   }
   for (const g of model.gridOut) {
     add(g.id, (r, v) => ((r.toGrid += v), (r.tariffOut[g.id] = (r.tariffOut[g.id] || 0) + v)));
-    add(g.comp, (r, v) => (r.comp += Math.abs(v)));
+    add(g.comp, (r, v) => ((r.comp += Math.abs(v)), (r.compOut[g.id] = (r.compOut[g.id] || 0) + Math.abs(v))));
   }
   for (const s of model.solar) add(s.id, (r, v) => (r.solar += v));
   for (const b of model.batteries) {
@@ -298,14 +360,31 @@ function compute(model, raw, bucketStarts, cutoff = Infinity) {
 
   const buckets = bucketStarts.map(() => emptyAgg());
   const records = [...recs.values()].sort((a, b) => a.ts - b.ts);
+  const hourly = records.length > 1 ? records[1].ts - records[0].ts <= 3600e3 : true;
+  records.forEach((r) => Object.assign(r, decompose(r)));
+  const prices = tariffPrices(records);
+  const havePrice = Object.keys(prices).length > 0;
+  const shiftIds = model.devices.filter((d) => SHIFTABLE.test(devName(d))).map((d) => d.id);
   for (const r of records) {
-    Object.assign(r, decompose(r));
+    // Cost of consumption at the tariff that applied at that moment (dal/piek).
+    const w = tariffWeights(r, hourly);
+    let price = 0, wsum = 0;
+    for (const [k, share] of Object.entries(w)) {
+      if (prices[k] != null) (price += share * prices[k]), (wsum += share);
+      r.homeTariff[k] = (r.homeTariff[k] || 0) + share * r.home;
+    }
+    if (havePrice && wsum > 0) {
+      price /= wsum;
+      r.homeCost = r.home * price;
+      for (const [id, v] of Object.entries(r.dev)) r.devCost[id] = v * price;
+    }
+    if (w.piek) r.shiftPiek = sum(shiftIds, (id) => r.dev[id] || 0) * w.piek;
     const i = bucketIndex(bucketStarts, r.ts);
     if (i >= 0) mergeInto(buckets[i], r);
   }
   const total = emptyAgg();
   buckets.forEach((b) => b.n && mergeInto(total, b));
-  return { buckets, total, records, hasData: records.length > 0 };
+  return { buckets, total, records, prices, havePrice, hasData: records.length > 0 };
 }
 
 /* =========================================================================
@@ -318,6 +397,7 @@ const S = {
   views: { balance: "chart", devices: "list" },
 };
 let api, model, meta = {}, haConfig = {}, D = null, co2Entity = "";
+const livePrices = {};
 const cache = { calendar: new Map(), profile: new Map() };
 
 async function stats(ids, start, end, period, units) {
@@ -577,7 +657,7 @@ function renderKpis() {
   if (model.hasSolar || model.hasBattery) {
     const self = T.home > 0 ? (T.home - T.gridToHome) / T.home : 0;
     const pself = P && P.home > 0 ? (P.home - P.gridToHome) / P.home : null;
-    tile("Zelfvoorzienend", css("--export"), num(self * 100, 0), "%", "eigen opwek + batterij", pself != null ? deltaPP(self, pself) : "", ring(self, css("--export")));
+    tile("Zelfvoorzienend", css("--export"), num(self * 100, 0), "%", model.hasBattery ? "eigen opwek + batterij" : "uit eigen opwek", pself != null ? deltaPP(self, pself) : "", ring(self, css("--export")));
   }
   if (model.hasBattery) {
     const [v, u] = kwhParts(T.batOut);
@@ -664,7 +744,7 @@ function renderSankey() {
     series: [
       {
         type: "sankey",
-        left: 4, right: 200, top: 8, bottom: 8,
+        left: 4, right: $("#chart-sankey").clientWidth < 640 ? 120 : 200, top: 8, bottom: 8,
         nodeWidth: 12, nodeGap: 10, nodeAlign: "justify", draggable: false,
         layoutIterations: 64,
         data: [...nodes.values()].filter((n) => used.has(n.name)),
@@ -673,7 +753,7 @@ function renderSankey() {
         emphasis: { focus: "adjacency", lineStyle: { opacity: 0.6 } },
         label: {
           color: css("--ink"), fontSize: 12,
-          formatter: (p) => `{n|${p.data.label}}  {v|${kwh(p.value)}}`,
+          formatter: (p) => ($("#chart-sankey").clientWidth < 640 ? `{n|${p.data.label}}` : `{n|${p.data.label}}  {v|${kwh(p.value)}}`),
           rich: { n: { color: css("--ink"), fontSize: 12 }, v: { color: css("--ink-2"), fontSize: 11 } },
         },
       },
@@ -692,6 +772,7 @@ function emptyChart(id, text) {
 
 /* ---------- Balance chart + table ---------- */
 function renderBalance() {
+  $("#balance-sub").textContent = `Boven de nullijn: waar je verbruik vandaan kwam. Onder de nullijn: teruglevering${model.hasBattery ? " en batterij laden" : ""}.`;
   const B = D.C.buckets;
   const labels = D.buckets.map((b) => b.label), titles = D.buckets.map((b) => b.title);
   const series = [
@@ -759,22 +840,31 @@ function renderDevices() {
   if (!model.devices.length) return;
   const T = D.C.total;
   const home = T.home || 1;
+  const withCost = D.C.havePrice;
   const top = model.devices.filter((d) => !d.parent);
   const tracked = sum(top, (d) => T.dev[d.id] || 0);
+  const trackedCost = sum(top, (d) => T.devCost[d.id] || 0);
+  const costCell = (c) => (withCost ? `<span class="cost">${money(c)}</span>` : "");
   const rows = [];
   const row = (d, depth) => {
-    const v = T.dev[d.id] || 0;
-    rows.push(`<div class="dev ${depth ? "child" : ""}" title="${esc(devName(d))}: ${kwh(v)}">
+    const v = T.dev[d.id] || 0, c = T.devCost[d.id] || 0;
+    rows.push(`<div class="dev ${depth ? "child" : ""}" title="${esc(devName(d))}: ${kwh(v)}${withCost ? ` · ${money(c)}` : ""}">
       <span class="dot" style="background:${css(d.slot)}"></span><span class="name">${esc(devName(d))}</span>
       <span class="bar"><span style="width:${Math.min(100, (v / home) * 100)}%;background:${css(d.slot)}"></span></span>
-      <span class="val">${kwh(v)}<small>${pct(v / home)}</small></span></div>`);
+      <span class="val">${kwh(v)}<small>${pct(v / home)}</small>${costCell(c)}</span></div>`);
     model.devices.filter((c) => c.parent === d.id).sort((a, b) => (T.dev[b.id] || 0) - (T.dev[a.id] || 0)).forEach((c) => row(c, depth + 1));
   };
   top.sort((a, b) => (T.dev[b.id] || 0) - (T.dev[a.id] || 0)).forEach((d) => row(d, 0));
   const rest = clamp0(T.home - tracked);
+  const restCost = clamp0(T.homeCost - trackedCost);
   rows.push(`<div class="dev"><span class="dot" style="background:${css("--other")}"></span><span class="name">Niet apart gemeten</span>
-    <span class="bar"><span style="width:${(rest / home) * 100}%;background:${css("--other")}"></span></span><span class="val">${kwh(rest)}<small>${pct(rest / home)}</small></span></div>`);
+    <span class="bar"><span style="width:${(rest / home) * 100}%;background:${css("--other")}"></span></span><span class="val">${kwh(rest)}<small>${pct(rest / home)}</small>${costCell(restCost)}</span></div>`);
+  if (withCost)
+    rows.push(`<div class="dev" style="border-top:1px solid var(--grid);margin-top:4px;padding-top:8px"><span></span><span class="name"><b>Totaal verbruik</b></span><span></span>
+      <span class="val"><b>${kwh(T.home)}</b><small>100%</small>${costCell(T.homeCost)}</span></div>`);
   $("#device-list").innerHTML = rows.join("");
+  $("#device-cost-hint").textContent = withCost ? "kosten tegen het dal- of piektarief van dat moment" : "";
+  $("#device-cost-hint").title = "Kosten = verbruik van het apparaat × de prijs van het tarief (dal/piek) dat op dat uur gold. Ook stroom van je zonnepanelen telt mee tegen dat tarief.";
 
   const B = D.C.buckets;
   const series = top.map((d) => bar(devName(d), B.map((b) => b.dev[d.id] || 0), css(d.slot), "dev"));
@@ -787,7 +877,7 @@ function renderDevices() {
       ...base(),
       grid: { left: 6, right: 10, top: 56, bottom: 4, containLabel: true },
       legend: legend({ type: "scroll" }),
-      tooltip: axisTooltip(D.buckets.map((b) => b.title), (v) => kwh(v)),
+      tooltip: axisTooltip(D.buckets.map((b) => b.title), (v) => kwh(v), withCost ? (i) => `<div style="border-top:1px solid ${css("--grid")};margin-top:5px;padding-top:5px;display:flex;justify-content:space-between;gap:18px"><span>Kosten</span><b>${money(B[i].homeCost)}</b></div>` : undefined),
       xAxis: catAxis(D.buckets.map((b) => b.label)),
       yAxis: valAxis((v) => num(v, v % 1 ? 1 : 0)),
       series,
@@ -864,85 +954,63 @@ function renderCosts() {
     });
   }
 
-  // Average price per kWh + tariff split
-  const showPrice = model.hasCost && T.fromGrid > 0;
-  const showTariff = model.gridIn.length > 1 || model.gridOut.length > 1;
-  $("#card-price").hidden = !(showPrice || showTariff);
-  $("#chart-price").hidden = !showPrice;
-  if (showPrice) {
-    const avg = T.cost / T.fromGrid;
-    const data = B.map((b) => (b.fromGrid > 0.01 && b.cost ? b.cost / b.fromGrid : null));
-    setChart("chart-price", {
-      ...base(),
-      grid: { left: 6, right: 96, top: 14, bottom: 4, containLabel: true },
-      tooltip: axisTooltip(D.buckets.map((b) => b.title), (v) => `${money(v, 3)} / kWh`),
-      xAxis: catAxis(D.buckets.map((b) => b.label)),
-      yAxis: valAxis((v) => money(v, 3), { scale: true, splitNumber: 4 }),
-      series: [
-        {
-          name: "Gem. prijs", type: S.period === "day" ? "line" : "bar", step: S.period === "day" ? "middle" : undefined, data,
-          barMaxWidth: 18, symbol: "none", connectNulls: false,
-          lineStyle: { width: 2, color: css("--grid-in") },
-          itemStyle: { color: css("--grid-in"), borderRadius: [3, 3, 0, 0] },
-          areaStyle: S.period === "day" ? { color: css("--grid-in"), opacity: 0.08 } : undefined,
-          markLine: {
-            symbol: "none", silent: true,
-            lineStyle: { color: css("--muted"), type: "dotted" },
-            label: { formatter: `gem. ${money(avg, 3)}`, color: css("--ink-2"), fontSize: 11, position: "end" },
-            data: [{ yAxis: avg }],
-          },
-        },
-      ],
-    });
-  }
-  const split = (title, map, ids, colors) => {
-    const tot = sum(ids, (id) => map[id] || 0);
-    if (tot <= 0 || ids.length < 2) return "";
-    return `<div class="row"><span>${title}</span><span>${kwh(tot)}</span><div class="stack">${ids
-      .map((id, i) => `<span title="${esc(meta[id]?.name || id)}: ${kwh(map[id] || 0)}" style="width:${((map[id] || 0) / tot) * 100}%;background:${colors[i % colors.length]}"></span>`)
-      .join("")}</div>${ids.map((id, i) => `<span>${swatch(colors[i % colors.length])}${esc(meta[id]?.name || id)}</span><span>${kwh(map[id] || 0)} · ${pct((map[id] || 0) / tot)}</span>`).join("")}</div>`;
-  };
-  $("#tariff-split").innerHTML =
-    split("Afname per telwerk", T.tariffIn, model.gridIn.map((g) => g.id), [css("--seq-6"), css("--seq-3")]) +
-    split("Teruglevering per telwerk", T.tariffOut, model.gridOut.map((g) => g.id), [css("--export"), css("--seq-2")]);
 }
 
-/* ---------- Load profile heatmap ---------- */
-async function renderProfile() {
-  const card = $("#card-profile");
-  const recs = await loadProfile();
-  const grid = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => [0, 0]));
-  for (const r of recs) {
-    const d = new Date(r.ts);
-    const g = grid[(d.getDay() + 6) % 7][d.getHours()];
-    g[0] += r.home;
-    g[1]++;
-  }
-  const data = [];
-  let max = 0;
-  grid.forEach((row, y) => row.forEach(([s, n], x) => {
-    if (!n) return;
-    const w = (s / n) * 1000;
-    max = Math.max(max, w);
-    data.push([x, y, Math.round(w)]);
-  }));
-  card.hidden = !data.length;
-  if (!data.length) return;
-  const days = ["ma", "di", "wo", "do", "vr", "za", "zo"];
-  setChart("chart-profile", {
+/* ---------- Dal / piek tariff ---------- */
+const TARIFF_COL = { dal: ["--grid-in", "--export"], piek: ["--d2", "--d4"], enkel: ["--grid-in", "--export"] };
+const tariffCol = (k, dir) => css((TARIFF_COL[k] || ["--d7", "--d8"])[dir === "in" ? 0 : 1]);
+function renderTariff() {
+  const T = D.C.total, B = D.C.buckets;
+  const keys = model.tariffKeys || [];
+  const card = $("#card-tariff");
+  card.hidden = !model.gridIn.length;
+  if (!model.gridIn.length) return;
+  const byKey = (map, list) => {
+    const o = {};
+    for (const g of list) o[g.tariff] = (o[g.tariff] || 0) + (map[g.id] || 0);
+    return o;
+  };
+  const inK = byKey(T.tariffIn, model.gridIn), outK = byKey(T.tariffOut, model.gridOut);
+  const costK = byKey(T.costIn, model.gridIn), compK = byKey(T.compOut, model.gridOut);
+  const prices = D.C.prices || {};
+  const hasOut = model.gridOut.length > 0, hasMoney = D.C.havePrice || model.hasCost;
+  const costOfK = (k) => (costK[k] ? costK[k] : prices[k] != null ? (inK[k] || 0) * prices[k] : null);
+  const head = ["Tarief", "Afname", ...(hasOut ? ["Teruglevering", "Netto"] : []), ...(hasMoney ? ["Prijs/kWh", "Kosten"] : []), ...(hasOut && model.hasCost ? ["Vergoeding"] : [])];
+  const rowFor = (k) => {
+    const i = inK[k] || 0, o = outK[k] || 0, c = costOfK(k);
+    return [
+      `<td class="k"><i style="background:${tariffCol(k, "in")}"></i>${tariffLabel(k)}</td>`,
+      `<td>${kwh(i)} <small style="color:var(--muted)">${pct(i / (T.fromGrid || 1))}</small></td>`,
+      ...(hasOut ? [`<td>${kwh(o)}</td>`, `<td>${kwh(i - o)}</td>`] : []),
+      ...(hasMoney ? [`<td>${prices[k] != null ? money(prices[k], 3) : "–"}</td>`, `<td>${c != null ? money(c) : "–"}</td>`] : []),
+      ...(hasOut && model.hasCost ? [`<td>${compK[k] ? `− ${money(compK[k])}` : "–"}</td>`] : []),
+    ].join("");
+  };
+  const totalCost = sum(keys, (k) => costOfK(k) || 0);
+  const totalRow = [
+    `<td class="k">Totaal</td>`,
+    `<td>${kwh(T.fromGrid)}</td>`,
+    ...(hasOut ? [`<td>${kwh(T.toGrid)}</td>`, `<td>${kwh(T.fromGrid - T.toGrid)}</td>`] : []),
+    ...(hasMoney ? [`<td>${T.fromGrid > 0 && totalCost ? money(totalCost / T.fromGrid, 3) : "–"}</td>`, `<td>${money(totalCost)}</td>`] : []),
+    ...(hasOut && model.hasCost ? [`<td>− ${money(T.comp)}</td>`] : []),
+  ].join("");
+  $("#tariff-table").innerHTML = `<table class="tariff-tbl"><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${keys
+    .map((k) => `<tr>${rowFor(k)}</tr>`)
+    .join("")}<tr style="font-weight:600">${totalRow}</tr></tbody></table>`;
+
+  const series = [
+    ...keys.map((k) => bar(`Afname ${tariffLabel(k).toLowerCase()}`, B.map((b) => byKey(b.tariffIn, model.gridIn)[k] || 0), tariffCol(k, "in"), "in")),
+    ...keys.map((k) => bar(`Teruglevering ${tariffLabel(k).toLowerCase()}`, B.map((b) => -(byKey(b.tariffOut, model.gridOut)[k] || 0)), tariffCol(k, "out"), "out")),
+  ].filter((x) => anyNonZero(x.data));
+  setChart("chart-tariff", {
     ...base(),
-    grid: { left: 6, right: 10, top: 6, bottom: 46, containLabel: true },
-    tooltip: tooltipBase({ formatter: (p) => `<b>${days[p.value[1]]} ${String(p.value[0]).padStart(2, "0")}:00</b><br>gem. ${num(p.value[2], 0)} W` }),
-    xAxis: { type: "category", data: [...Array(24).keys()].map((h) => String(h).padStart(2, "0")), splitArea: { show: false }, axisTick: { show: false }, axisLine: { show: false }, axisLabel: { color: css("--muted"), fontSize: 11 } },
-    yAxis: { type: "category", data: days, inverse: true, axisTick: { show: false }, axisLine: { show: false }, axisLabel: { color: css("--muted"), fontSize: 11 } },
-    visualMap: {
-      min: 0, max: Math.ceil(max / 100) * 100 || 100, calculable: false, orient: "horizontal", left: "center", bottom: 0, itemHeight: 220, itemWidth: 10,
-      text: [`${num(max, 0)} W`, "0 W"], textStyle: { color: css("--muted"), fontSize: 11 },
-      inRange: { color: [css("--seq-0"), css("--seq-1"), css("--seq-2"), css("--seq-3"), css("--seq-4"), css("--seq-5"), css("--seq-6"), css("--seq-7")] },
-    },
-    series: [{ type: "heatmap", data, itemStyle: { borderColor: css("--surface"), borderWidth: 2, borderRadius: 3 }, emphasis: { itemStyle: { borderColor: css("--ink"), borderWidth: 1 } } }],
+    grid: { left: 6, right: 10, top: 54, bottom: 4, containLabel: true },
+    legend: legend(),
+    tooltip: axisTooltip(D.buckets.map((b) => b.title), (v) => kwh(v)),
+    xAxis: catAxis(D.buckets.map((b) => b.label)),
+    yAxis: valAxis((v) => num(v, v % 1 ? 1 : 0)),
+    series,
   });
-  D.profileRecs = recs;
 }
 
 /* ---------- Gas & water ---------- */
@@ -1020,52 +1088,149 @@ async function renderCalendar() {
 
 /* ---------- Insights ---------- */
 function renderInsights() {
-  const T = D.C.total, out = [];
+  const T = D.C.total, B = D.C.buckets, out = [];
   const add = (ico, title, text) => out.push(`<li><span class="ico" aria-hidden="true">${ico}</span><div><b>${title}</b><span>${text}</span></div></li>`);
-  const avgPrice = model.hasCost && T.fromGrid > 0 ? T.cost / T.fromGrid : null;
-
+  const prices = D.C.prices || {};
+  const avgPrice = T.home > 0 && T.homeCost > 0 ? T.homeCost / T.home : model.hasCost && T.fromGrid > 0 ? T.cost / T.fromGrid : null;
+  const unitName = S.period === "day" ? "uur" : S.period === "year" ? "maand" : "dag";
   const recs = D.profileRecs || [];
+
+  // Standby load (last 4 weeks)
   if (recs.length > 48) {
     const watts = recs.map((r) => r.home * 1000).sort((a, b) => a - b);
     const base = watts[Math.floor(watts.length * 0.05)];
     const yearKwh = (base * 8760) / 1000;
-    add("🌙", `Sluipverbruik ≈ ${num(base, 0)} W`, `Dat is ongeveer ${num(yearKwh, 0)} kWh per jaar${avgPrice ? ` (≈ ${money(yearKwh * avgPrice, 0)})` : ""}. Gemeten als het laagste uurverbruik van de afgelopen 4 weken.`);
+    add("🌙", `Sluipverbruik ≈ ${num(base, 0)} W`, `Dat is ongeveer ${num(yearKwh, 0)} kWh per jaar${avgPrice ? ` (≈ ${money(yearKwh * avgPrice, 0)})` : ""}. Gemeten als het laagste uurverbruik van de afgelopen 4 weken. Elke 10 W minder scheelt ${num(87.6, 0)} kWh per jaar.`);
   }
-  const B = D.C.buckets;
-  const unitName = S.period === "day" ? "uur" : S.period === "year" ? "maand" : "dag";
+  // Dal vs piek
+  const dal = T.homeTariff?.dal || 0, piek = T.homeTariff?.piek || 0;
+  if (dal + piek > 0.1) {
+    let text = `${kwh(dal)} in het daltarief en ${kwh(piek)} in het piektarief.`;
+    if (prices.dal != null && prices.piek != null && prices.piek > prices.dal) {
+      text += ` Piek is ${money(prices.piek - prices.dal, 3)} per kWh duurder.`;
+      if (T.shiftPiek > 0.05) text += ` Wasmachine, droger en vaatwasser draaiden ${kwh(T.shiftPiek)} in piekuren — in het dal had dat ${money(T.shiftPiek * (prices.piek - prices.dal))} gescheeld.`;
+    }
+    add("🕐", `${pct(dal / (dal + piek))} van je verbruik viel in het daltarief`, text);
+  }
+  // Peak moment
   if (T.home > 0) {
     const pi = B.reduce((bi, b, i) => (b.home > B[bi].home ? i : bi), 0);
     add("📈", `Hoogste verbruik: ${D.buckets[pi].title}`, `${kwh(B[pi].home)} in ${unitName === "dag" || unitName === "maand" ? "die" : "dat"} ${unitName}, ${pct(B[pi].home / T.home)} van het totaal deze periode.`);
+    const filled = B.filter((b) => b.n && b.home > 0);
+    if (filled.length > 3 && S.period !== "day") {
+      const lo = filled.reduce((a, b) => (b.home < a.home ? b : a));
+      const li = B.indexOf(lo);
+      add("📉", `Zuinigste ${unitName}: ${D.buckets[li].title}`, `${kwh(lo.home)} — ${pct(1 - lo.home / (T.home / filled.length))} onder je gemiddelde.`);
+    }
   }
+  // Devices
   if (model.devices.length && T.home > 0) {
-    const top = model.devices.filter((d) => !d.parent).sort((a, b) => (T.dev[b.id] || 0) - (T.dev[a.id] || 0))[0];
-    const v = T.dev[top?.id] || 0;
-    if (v > 0) add("🔌", `Grootste verbruiker: ${esc(devName(top))}`, `${kwh(v)} (${pct(v / T.home)} van je verbruik)${avgPrice ? `, ≈ ${money(v * avgPrice)} tegen je gemiddelde netprijs` : ""}.`);
+    const top = model.devices.filter((d) => !d.parent);
+    const byKwh = [...top].sort((a, b) => (T.dev[b.id] || 0) - (T.dev[a.id] || 0))[0];
+    const v = T.dev[byKwh?.id] || 0;
+    if (v > 0) add("🔌", `Grootste verbruiker: ${esc(devName(byKwh))}`, `${kwh(v)} (${pct(v / T.home)} van je verbruik)${D.C.havePrice ? `, ${money(T.devCost[byKwh.id] || 0)}` : ""}.`);
+    const tracked = sum(top, (d) => T.dev[d.id] || 0);
+    const untracked = clamp0(T.home - tracked) / T.home;
+    if (untracked > 0.35)
+      add("🔍", `${pct(untracked)} van je verbruik wordt niet apart gemeten`, "Een paar slimme stekkers (bijv. bij koelkast, tv-meubel of bureau) maken zichtbaar waar die stroom heen gaat.");
   }
+  // Weekend vs weekdays and night share (last 4 weeks)
+  if (recs.length > 24 * 10) {
+    const days = new Map();
+    for (const r of recs) {
+      const d = new Date(r.ts);
+      const k = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      const e = days.get(k) || { kwh: 0, n: 0, we: d.getDay() === 0 || d.getDay() === 6 };
+      e.kwh += r.home;
+      e.n++;
+      days.set(k, e);
+    }
+    const full = [...days.values()].filter((e) => e.n >= 23);
+    const we = full.filter((e) => e.we), wd = full.filter((e) => !e.we);
+    if (we.length && wd.length) {
+      const a = sum(we, (e) => e.kwh) / we.length, b = sum(wd, (e) => e.kwh) / wd.length;
+      const d = (a - b) / b;
+      add("📅", Math.abs(d) < 0.05 ? "Weekend en doordeweeks zijn vrijwel gelijk" : `In het weekend ${pct(Math.abs(d))} ${d > 0 ? "meer" : "minder"} verbruik`, `Gemiddeld ${kwh(a)} per weekenddag tegenover ${kwh(b)} doordeweeks (laatste 4 weken).`);
+    }
+    const night = sum(recs.filter((r) => new Date(r.ts).getHours() < 6), (r) => r.home);
+    const all = sum(recs, (r) => r.home);
+    if (all > 0) add("🦉", `${pct(night / all)} van je stroom gebruik je tussen 0:00 en 6:00`, `Dat is gemiddeld ${num((night / Math.max(1, recs.filter((r) => new Date(r.ts).getHours() < 6).length)) * 1000, 0)} W terwijl iedereen slaapt.`);
+  }
+  // Solar
   if (model.hasSolar && T.solar > 0) {
     const sc = (T.solar - T.solarToGrid) / T.solar;
-    add("☀️", `${pct(sc)} van je zonnestroom zelf gebruikt`, T.solarToGrid > 0.1 ? `${kwh(T.solarToGrid)} ging naar het net. Draai grote verbruikers (wasmachine, vaatwasser, auto laden) bij voorkeur tijdens zonuren.` : "Vrijwel alle opwek is direct of via de batterij in huis gebruikt.");
-  }
-  if (model.gridOut.length && T.toGrid > 0.1) {
-    const nettingEnd = new Date(2027, 0, 1);
-    if (new Date() < nettingEnd)
-      add("⚖️", "Salderen stopt per 1 januari 2027", `Je leverde deze periode ${kwh(T.toGrid)} terug. Na afschaffing van de salderingsregeling krijg je hiervoor alleen nog de terugleververgoeding van je leverancier — zelf verbruiken of opslaan wordt dan waardevoller.`);
-    else add("⚖️", "Geen saldering meer", `Je leverde ${kwh(T.toGrid)} terug${model.hasCost ? ` voor ${money(T.comp)}` : ""}. Zelfverbruik en opslag leveren nu het meeste op.`);
+    add("☀️", `${pct(sc)} van je zonnestroom zelf gebruikt`, T.solarToGrid > 0.1 ? `${kwh(T.solarToGrid)} ging naar het net. Zet wasmachine, droger en vaatwasser bij voorkeur aan als de zon schijnt.` : "Vrijwel alle opwek is direct in huis gebruikt.");
+    const self = T.home > 0 ? (T.home - T.gridToHome) / T.home : 0;
+    if (self > 0) add("🏡", `${pct(self)} van je verbruik kwam van je eigen dak`, `${kwh(T.home - T.gridToHome)} van de ${kwh(T.home)} hoefde niet van het net te komen.`);
   }
   if (model.hasBattery && T.batIn > 0.1) {
     const eff = T.batOut / T.batIn;
     add("🔋", `Batterij dekte ${pct(T.batToHome / (T.home || 1))} van je verbruik`, `${kwh(T.batIn)} geladen (${pct(T.solarToBat / T.batIn)} uit zon), ${kwh(T.batOut)} ontladen${eff > 0.5 && eff < 1.05 && S.period !== "day" ? `; rendement ≈ ${pct(eff)}` : ""}.`);
   }
+  // Compared to previous period
   if (S.compare && D.Pcut && D.Pcut.total.home > 0 && T.home > 0) {
     const d = (T.home - D.Pcut.total.home) / D.Pcut.total.home;
     if (Math.abs(d) > 0.03)
       add(d < 0 ? "✅" : "⚠️", `${num(Math.abs(d) * 100, 0)}% ${d < 0 ? "minder" : "meer"} verbruik dan ${PREV_NAME[S.period]}`, `${kwh(T.home)} tegenover ${kwh(D.Pcut.total.home)}${D.inProgress ? " op hetzelfde tijdstip" : ""}.`);
   }
+  // Gas & water
+  const days = Math.max(1, (Math.min(Date.now(), D.end) - D.start) / 864e5);
   if (model.gas.length && T.gas > 0 && S.period !== "day") {
-    const days = Math.max(1, (Math.min(Date.now(), D.end) - D.start) / 864e5);
     add("🔥", `Gemiddeld ${unitFmt(T.gas / days, gasUnit())} gas per dag`, D.Pcut?.total.gas ? `${PREV_NAME[S.period][0].toUpperCase() + PREV_NAME[S.period].slice(1)}: ${unitFmt(D.Pcut.total.gas / days, gasUnit())} per dag.` : "");
   }
+  const hh = api.options?.household_size || 0;
+  if (model.water.length && T.water > 0 && S.period !== "day") {
+    const perDay = T.water / days;
+    add("💧", hh ? `${num(perDay / hh, 0)} L water per persoon per dag` : `${num(perDay, 0)} L water per dag`, hh ? `Een gemiddelde Nederlander gebruikt ongeveer 125 L per dag${perDay / hh < 125 ? " — jullie zitten daaronder." : "."}` : "Een gemiddelde Nederlander gebruikt ongeveer 125 L per dag. Vul in de app-opties je huishoudgrootte in voor een vergelijking per persoon.");
+  }
   $("#insights").innerHTML = out.length ? out.join("") : `<li><div class="empty">Nog te weinig gegevens voor inzichten.</div></li>`;
+}
+
+/* ---------- Fun facts (rounded rules of thumb) ---------- */
+const FACT = {
+  phoneKwh: 0.015, // full smartphone charge ≈ 15 Wh
+  teaKwh: 0.03, // one cup of tea in a kettle
+  evKwhPerKm: 0.18,
+  ledW: 8,
+  co2PerKwh: 0.3, // kg CO2 per kWh, Dutch electricity mix (approx.)
+  co2PerM3Gas: 1.78, // kg CO2 per m3 natural gas
+  kwhPerM3Gas: 8.8, // energy content of 1 m3 Groningen-quality gas
+  treeKgPerYear: 20,
+  showerL: 60,
+  bathL: 120,
+  nlKwhYear: 2500, // average Dutch household, rounded
+  nlGasYear: 1000,
+};
+function renderFacts() {
+  const T = D.C.total, out = [];
+  const add = (big, title, text) => out.push(`<li><span class="big" aria-hidden="true">${big}</span><div><b>${title}</b><span>${text}</span></div></li>`);
+  const days = Math.max(1 / 24, (Math.min(Date.now(), D.end) - D.start) / 864e5);
+  const big = (v) => num(v, v < 10 ? 1 : 0);
+  if (T.home > 0) {
+    add("📱", `${big(T.home / FACT.phoneKwh)}× je telefoon opladen`, `Zoveel energie zit er in je stroomverbruik van ${kwh(T.home)}.`);
+    add("☕", `${big(T.home / FACT.teaKwh)} koppen thee`, "zou je kunnen zetten met dezelfde hoeveelheid stroom.");
+    add("🚗", `${big(T.home / FACT.evKwhPerKm)} km elektrisch rijden`, "Zo ver komt een gemiddelde elektrische auto op je verbruik van deze periode.");
+    const avgW = (T.home * 1000) / (days * 24);
+    add("💡", `${big(avgW / FACT.ledW)} ledlampen die continu branden`, `Je huis verbruikte gemiddeld ${num(avgW, 0)} W — evenveel als zoveel ledlampen van ${FACT.ledW} W.`);
+  }
+  if (model.hasSolar && T.solar > 0) {
+    const co2 = T.solar * FACT.co2PerKwh;
+    add("🌳", `≈ ${big(co2)} kg CO₂ bespaard`, `door je zonnepanelen — wat ${big(co2 / (FACT.treeKgPerYear * (days / 365)))} bomen in dezelfde tijd opnemen.`);
+    const homePerDay = T.home / days;
+    if (homePerDay > 0 && S.period !== "day")
+      add("🔆", `${big(T.solar / homePerDay)} dagen stroom`, `Je panelen wekten genoeg op om je huis ${big(T.solar / homePerDay)} gemiddelde dagen van stroom te voorzien.`);
+  }
+  if (model.gas.length && T.gas > 0 && gasUnit() === "m³") {
+    add("🔥", `${big(T.gas * FACT.kwhPerM3Gas)} kWh aan warmte`, `Je ${unitFmt(T.gas, "m³")} gas bevat ${T.home > 0 ? `${big((T.gas * FACT.kwhPerM3Gas) / T.home)}× zoveel energie als je stroomverbruik` : "veel energie"}, en gaf ≈ ${big(T.gas * FACT.co2PerM3Gas)} kg CO₂.`);
+  }
+  if (model.water.length && T.water > 0) {
+    add("🚿", `${big(T.water / FACT.showerL)} douchebeurten`, `${waterFmt(T.water).join(" ")} water is ongeveer ${big(T.water / FACT.bathL)} volle badkuipen.`);
+  }
+  if ((S.period === "month" || S.period === "year") && days >= 7 && T.home > 0) {
+    const yearKwh = (T.home / days) * 365;
+    add("🇳🇱", `≈ ${num(yearKwh, 0)} kWh per jaar`, `In dit tempo verbruik je ${yearKwh < FACT.nlKwhYear ? `${pct(1 - yearKwh / FACT.nlKwhYear)} minder` : `${pct(yearKwh / FACT.nlKwhYear - 1)} meer`} stroom dan een gemiddeld Nederlands huishouden (grofweg ${num(FACT.nlKwhYear, 0)} kWh).`);
+  }
+  $("#facts").innerHTML = out.length ? out.join("") : `<li><div class="empty">Nog geen gegevens.</div></li>`;
 }
 
 /* =========================================================================
@@ -1082,14 +1247,30 @@ function liveEntities() {
     soc: o.battery_soc_entity || "",
   };
 }
+/** Find a live power sensor (W) per device: Energy settings → app option → same HA device. */
+async function resolveDevicePower() {
+  const map = {};
+  for (const d of model.devices) if (d.rate) map[d.id] = d.rate;
+  for (const line of api.options?.device_power_entities || []) {
+    const [e, pw] = String(line).split("=").map((x) => x.trim());
+    if (e && pw) map[e] = pw;
+  }
+  const missing = model.devices.filter((d) => !map[d.id]).map((d) => d.id);
+  if (missing.length && api.devicePower) {
+    const auto = await api.devicePower(missing).catch(() => ({}));
+    for (const id of missing) if (auto?.[id]) map[id] = auto[id];
+  }
+  model.devicePower = map;
+}
 function setupLive() {
   const E = liveEntities();
-  const ids = Object.values(E).filter(Boolean);
-  const card = $("#card-live");
-  card.hidden = !E.grid;
-  $("#card-sankey").classList.toggle("span-12", !E.grid);
-  $("#card-sankey").classList.toggle("span-7", !!E.grid);
-  if (!E.grid) return;
+  const devPower = model.devicePower || {};
+  const devs = model.devices.filter((d) => devPower[d.id]);
+  const ids = [...new Set([...Object.values(E), ...devs.map((d) => devPower[d.id])].filter(Boolean))];
+  const show = !!E.grid || devs.length > 0;
+  $("#card-live").hidden = !show;
+  clearInterval(liveTimer);
+  if (!show) return;
   const tick = async () => {
     try {
       const st = await api.states(ids);
@@ -1099,51 +1280,108 @@ function setupLive() {
         const v = parseFloat(s.state);
         return /^kW$/i.test(s.unit || "") ? v * 1000 : /^MW$/i.test(s.unit || "") ? v * 1e6 : v;
       };
-      const grid = w(E.grid) - (E.gridExport ? w(E.gridExport) : 0);
+      const grid = E.grid ? w(E.grid) - (E.gridExport ? w(E.gridExport) : 0) : null;
       const solar = E.solar ? Math.max(0, w(E.solar)) : 0;
       const battery = E.battery ? w(E.battery) : 0;
       const soc = E.soc && st[E.soc] ? parseFloat(st[E.soc].state) : null;
-      drawLive({ grid, solar, battery, soc, hasSolar: !!E.solar, hasBattery: !!E.battery });
+      const dev = {};
+      for (const d of devs) dev[d.id] = Math.max(0, w(devPower[d.id]));
+      drawLive({ grid, solar, battery, soc, hasSolar: !!E.solar, hasBattery: !!E.battery, devs, dev });
       $("#live-updated").textContent = `bijgewerkt ${new Date().toLocaleTimeString(LOCALE)}`;
     } catch (e) {
       $("#live-updated").textContent = "geen live-data";
     }
   };
-  clearInterval(liveTimer);
   tick();
   liveTimer = setInterval(tick, Math.max(2, api.options?.live_refresh_seconds || 5) * 1000);
 }
-function drawLive({ grid, solar, battery, soc, hasSolar, hasBattery }) {
-  const f = decompose({ fromGrid: clamp0(grid), toGrid: clamp0(-grid), solar, batOut: clamp0(battery), batIn: clamp0(-battery) });
+function drawLive({ grid, solar, battery, soc, hasSolar, hasBattery, devs, dev }) {
   const W = (v) => (Math.abs(v) >= 1000 ? `${num(v / 1000, 2)} kW` : `${num(v, 0)} W`);
-  const P = { grid: [70, 170], home: [390, 170], solar: [230, 55], battery: [230, 285] };
-  const node = (k, label, value, color, sub = "") =>
-    `<g class="node" transform="translate(${P[k][0]},${P[k][1]})"><circle r="44" stroke="${color}"/><text class="t2" y="-10">${label}</text><text class="t1" y="9">${value}</text>${sub ? `<text class="t2" y="25">${sub}</text>` : ""}</g>`;
-  const edge = (a, b, val, color, bend = 0) => {
-    const [x1, y1] = P[a], [x2, y2] = P[b];
-    const mx = (x1 + x2) / 2 + bend, my = (y1 + y2) / 2 + bend;
-    const d = `M${x1},${y1} Q${mx},${my} ${x2},${y2}`;
-    const on = val > 5;
+  const hasGrid = grid != null;
+  const f = hasGrid ? decompose({ fromGrid: clamp0(grid), toGrid: clamp0(-grid), solar, batOut: clamp0(battery), batIn: clamp0(-battery) }) : null;
+
+  // Device rows (top-level first, children indented under their parent)
+  let rows = [];
+  const add = (d, depth) => {
+    rows.push({ d, depth, w: dev[d.id] || 0 });
+    devs.filter((c) => c.parent === d.id).forEach((c) => add(c, depth + 1));
+  };
+  devs.filter((d) => !d.parent || !devs.some((x) => x.id === d.parent)).forEach((d) => add(d, 0));
+  const topW = sum(rows.filter((r) => r.depth === 0), (r) => r.w);
+  const homeW = hasGrid ? f.home : topW;
+  if (hasGrid && rows.length) rows.push({ d: null, depth: 0, w: clamp0(homeW - topW) });
+  const compact = $("#live-flow").clientWidth < 640 && hasGrid;
+  const allRows = rows;
+  if (compact) rows = [];
+
+  const rowH = 36, VBW = rows.length ? 920 : 470;
+  const H = Math.max(rows.length ? 300 : 340, 30 + rows.length * rowH);
+  const cy = H / 2 + (hasSolar && hasGrid ? 30 : 0);
+  const P = rows.length
+    ? { grid: [80, cy], home: [380, cy], solar: [230, Math.max(50, cy - 135)], battery: [230, Math.min(H - 50, cy + 135)] }
+    : { grid: [70, 170], home: [390, 170], solar: [230, 55], battery: [230, 285] };
+  if (!hasGrid) P.home = [110, cy];
+  const flowPath = (d, val, color) => {
+    const on = val > 3;
     const dur = on ? Math.max(0.6, 4 - Math.log10(val + 1)) : 0;
     const width = on ? Math.min(6, 2 + val / 1500) : 0;
     return `<path class="base" d="${d}"/>${on ? `<path class="flow" d="${d}" stroke="${color}" stroke-width="${width}" style="animation-duration:${dur}s"><title>${W(val)}</title></path>` : ""}`;
   };
-  const edges = [
-    edge("grid", "home", f.gridToHome, css("--grid-in")),
-    hasSolar ? edge("solar", "home", f.solarToHome, css("--solar")) : "",
-    hasSolar ? edge("solar", "grid", f.solarToGrid, css("--export")) : "",
-    hasSolar && hasBattery ? edge("solar", "battery", f.solarToBat, css("--charge"), -40) : "",
-    hasBattery ? edge("battery", "home", f.batToHome, css("--battery")) : "",
-    hasBattery ? edge("grid", "battery", f.gridToBat, css("--charge")) : "",
-    hasBattery ? edge("battery", "grid", f.batToGrid, css("--export"), 30) : "",
-  ].join("");
+  const edge = (a, b, val, color, bend = 0) => {
+    const [x1, y1] = P[a], [x2, y2] = P[b];
+    return flowPath(`M${x1},${y1} Q${(x1 + x2) / 2 + bend},${(y1 + y2) / 2 + bend} ${x2},${y2}`, val, color);
+  };
+  const node = (k, label, value, color, sub = "") =>
+    `<g class="node" transform="translate(${P[k][0]},${P[k][1]})"><circle r="44" stroke="${color}"/><text class="t2" y="-10">${label}</text><text class="t1" y="9">${value}</text>${sub ? `<text class="t2" y="25">${sub}</text>` : ""}</g>`;
+
+  let edges = "";
+  if (hasGrid) {
+    edges += edge("grid", "home", f.gridToHome, css("--grid-in"));
+    if (hasSolar) edges += edge("solar", "home", f.solarToHome, css("--solar")) + edge("solar", "grid", f.solarToGrid, css("--export"));
+    if (hasSolar && hasBattery) edges += edge("solar", "battery", f.solarToBat, css("--charge"), -40);
+    if (hasBattery) edges += edge("battery", "home", f.batToHome, css("--battery")) + edge("grid", "battery", f.gridToBat, css("--charge")) + edge("battery", "grid", f.batToGrid, css("--export"), 30);
+  }
+  // Device pills
+  const x0 = 560, pillW = 340, maxW = Math.max(1, ...rows.map((r) => r.w));
+  const top0 = (H - rows.length * rowH) / 2 + 4;
+  let pills = "";
+  const parentY = {};
+  rows.forEach((r, i) => {
+    const y = top0 + i * rowH, x = x0 + r.depth * 26, w = pillW - r.depth * 26, mid = y + 14;
+    const color = r.d ? css(r.d.slot) : css("--other");
+    if (r.depth === 0) {
+      const [hx, hy] = P.home;
+      edges += flowPath(`M${hx + 44},${hy} C${hx + 120},${hy} ${x - 90},${mid} ${x},${mid}`, r.w, color);
+    } else {
+      const py = parentY[r.d.parent] ?? mid;
+      edges += flowPath(`M${x - 14},${py + 14} L${x - 14},${mid} L${x},${mid}`, r.w, color);
+    }
+    if (r.d) parentY[r.d.id] = y;
+    const name = r.d ? devName(r.d) : "Niet apart gemeten";
+    pills += `<g class="pill" transform="translate(${x},${y})"><title>${esc(name)}: ${W(r.w)}</title>
+      <rect class="bg" width="${w}" height="28" rx="14"/>
+      <rect width="${Math.max(0, (r.w / maxW) * (w - 4))}" height="24" x="2" y="2" rx="12" fill="${color}" opacity="0.22"/>
+      <circle cx="16" cy="14" r="5" fill="${color}"/>
+      <text x="28" y="15" class="${r.w < 3 ? "muted" : ""}">${esc(name.length > 30 ? name.slice(0, 29) + "…" : name)}</text>
+      <text x="${w - 12}" y="15" class="w ${r.w < 3 ? "muted" : ""}">${W(r.w)}</text></g>`;
+  });
   const nodes = [
-    node("grid", "Net", W(Math.abs(grid)), css("--grid-in"), grid < -5 ? "teruglevering" : grid > 5 ? "afname" : ""),
-    node("home", "Thuis", W(f.home), css("--home")),
-    hasSolar ? node("solar", "Zon", W(solar), css("--solar")) : "",
-    hasBattery ? node("battery", "Batterij", W(Math.abs(battery)), css("--battery"), soc != null && !isNaN(soc) ? `${num(soc, 0)}% · ${battery > 5 ? "ontladen" : battery < -5 ? "laden" : "rust"}` : "") : "",
+    hasGrid ? node("grid", "Net", W(Math.abs(grid)), css("--grid-in"), grid < -5 ? "teruglevering" : grid > 5 ? "afname" : "") : "",
+    node("home", "Thuis", W(homeW), css("--home"), hasGrid ? "" : "gemeten apparaten"),
+    hasGrid && hasSolar ? node("solar", "Zon", W(solar), css("--solar")) : "",
+    hasGrid && hasBattery ? node("battery", "Batterij", W(Math.abs(battery)), css("--battery"), soc != null && !isNaN(soc) ? `${num(soc, 0)}% · ${battery > 5 ? "ontladen" : battery < -5 ? "laden" : "rust"}` : "") : "",
   ].join("");
-  $("#live-flow").innerHTML = `<svg viewBox="0 0 460 340" role="img" aria-label="Live energiestroom">${edges}${nodes}</svg>`;
+  let list = "";
+  if (compact && allRows.length) {
+    const mx = Math.max(1, ...allRows.map((r) => r.w));
+    list = `<div class="device-list" style="max-height:none;margin-top:8px">${allRows
+      .map((r) => {
+        const color = r.d ? css(r.d.slot) : css("--other");
+        return `<div class="dev ${r.depth ? "child" : ""}"><span class="dot" style="background:${color}"></span><span class="name">${esc(r.d ? devName(r.d) : "Niet apart gemeten")}</span><span class="bar"><span style="width:${(r.w / mx) * 100}%;background:${color}"></span></span><span class="val">${W(r.w)}</span></div>`;
+      })
+      .join("")}</div>`;
+  }
+  $("#live-flow").innerHTML = `<svg viewBox="0 0 ${VBW} ${H}" role="img" aria-label="Live energiestroom per apparaat" style="max-height:${Math.max(340, H)}px;${compact ? "min-width:0" : ""}">${edges}${nodes}${pills}</svg>${list}`;
 }
 
 /* =========================================================================
@@ -1165,9 +1403,11 @@ function renderAll() {
   renderDevices();
   renderSolar();
   renderCosts();
+  renderTariff();
   renderUtility("gas");
   renderUtility("water");
   renderInsights();
+  renderFacts();
   const tbl = S.views.balance === "table";
   $("#chart-balance").hidden = tbl;
   $("#table-balance").hidden = !tbl;
@@ -1185,10 +1425,11 @@ async function reload({ silent = false } = {}) {
     if (!D.C.hasData) banner("Er zijn (nog) geen statistieken voor deze periode.", true);
     else if (!api.demo) banner("");
     await Promise.all([
-      renderProfile().catch((e) => console.warn("profile", e)),
+      loadProfile().then((r) => (D.profileRecs = r)).catch((e) => console.warn("profile", e)),
       renderCalendar().catch((e) => console.warn("calendar", e)),
     ]);
     renderInsights();
+    renderFacts();
   } catch (e) {
     console.error(e);
     banner(`Kon de gegevens niet laden: ${esc(e.message)}`);
@@ -1233,7 +1474,6 @@ function wireUi() {
     applyTheme(t);
     if (D) {
       renderAll();
-      renderProfile().catch(() => {});
       renderCalendar().catch(() => {});
       setupLive();
     }
@@ -1279,7 +1519,14 @@ async function init() {
     const ids = [...model.elecBase, ...model.devices.map((d) => d.id), ...model.gas.map((g) => g.id), ...model.water.map((w) => w.id)];
     const md = await api.ws({ type: "recorder/get_statistics_metadata", statistic_ids: ids }).catch(() => []);
     for (const x of md || []) meta[x.statistic_id] = { name: x.name || x.statistic_id, unit: x.statistics_unit_of_measurement || x.display_unit_of_measurement };
+    classifyTariffs(model);
     co2Entity = api.options?.co2_signal_entity || (await api.autodetect().catch(() => ({}))).co2_signal_entity || "";
+    await resolveDevicePower();
+    const priceEnts = model.gridIn.map((g) => g.priceEntity).filter(Boolean);
+    if (priceEnts.length) {
+      const st = await api.states(priceEnts).catch(() => ({}));
+      for (const id of priceEnts) if (st[id] && !isNaN(parseFloat(st[id].state))) livePrices[id] = parseFloat(st[id].state);
+    }
     setupLive();
     await reload();
   } catch (e) {

@@ -19,3 +19,9 @@ configuration:
     description: Optioneel. Bijv. de Electricity Maps-sensor "grid fossil fuel percentage". Wordt automatisch gezocht als dit leeg is.
   live_refresh_seconds:
     name: Verversinterval live-weergave (seconden)
+  household_size:
+    name: Huishoudgrootte
+    description: Optioneel. Aantal personen, voor een vergelijking van het waterverbruik per persoon (0 = onbekend).
+  device_power_entities:
+    name: Vermogenssensoren apparaten
+    description: Optioneel. Alleen nodig als de vermogenssensor van een apparaat niet automatisch wordt gevonden. Eén regel per apparaat: energiesensor=vermogenssensor, bijv. sensor.wasmachine_energy=sensor.wasmachine_power

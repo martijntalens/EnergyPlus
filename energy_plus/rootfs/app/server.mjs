@@ -182,6 +182,8 @@ async function handleApi(req, res, url) {
         battery_soc_entity: o.battery_soc_entity || "",
         co2_signal_entity: o.co2_signal_entity || "",
         live_refresh_seconds: o.live_refresh_seconds || 5,
+        household_size: o.household_size || 0,
+        device_power_entities: Array.isArray(o.device_power_entities) ? o.device_power_entities : [],
       },
     });
   }
@@ -201,7 +203,7 @@ async function handleApi(req, res, url) {
       .split(",")
       .map((s) => s.trim())
       .filter((s) => ENTITY_RE.test(s))
-      .slice(0, 20);
+      .slice(0, 60);
     const out = {};
     await Promise.all(
       ids.map(async (id) => {
@@ -229,6 +231,37 @@ async function handleApi(req, res, url) {
       .map((s) => s.entity_id)
       .filter((id) => id.startsWith("sensor.") && /fossil_fuel_percentage|fossil_fuel/.test(id));
     return send(res, 200, { co2_signal_entity: co2[0] || "" });
+  }
+
+  if (route === "device_power" && req.method === "POST") {
+    // For each energy sensor, find a power sensor (W/kW) on the same HA device.
+    const body = await readBody(req);
+    const ids = (Array.isArray(body.ids) ? body.ids : []).filter((s) => typeof s === "string" && ENTITY_RE.test(s)).slice(0, 100);
+    const [reg, states] = await Promise.all([
+      ha.call({ type: "config/entity_registry/list_for_display" }).catch(() => null),
+      haRest("/states"),
+    ]);
+    const deviceOf = new Map();
+    for (const e of reg?.entities || []) if (e.ei && e.di) deviceOf.set(e.ei, e.di);
+    const isPower = (s) =>
+      s.entity_id.startsWith("sensor.") &&
+      (s.attributes?.device_class === "power" || /^(k|M)?W$/.test(s.attributes?.unit_of_measurement || "")) &&
+      !/_returned|_export|_production|_productie|teruglever/.test(s.entity_id);
+    const power = states.filter(isPower).map((s) => s.entity_id);
+    const powerSet = new Set(power);
+    const out = {};
+    for (const id of ids) {
+      const dev = deviceOf.get(id);
+      let match = dev ? power.filter((p) => deviceOf.get(p) === dev) : [];
+      if (match.length > 1) match = match.filter((p) => /power|vermogen|_w$/.test(p)).concat(match);
+      if (!match.length) {
+        // Name heuristic: sensor.x_energy -> sensor.x_power
+        const guess = id.replace(/_(today_|total_)?(energy|energie|consumption|verbruik)(_total|_today)?$/, "_power");
+        if (guess !== id && powerSet.has(guess)) match = [guess];
+      }
+      if (match[0]) out[id] = match[0];
+    }
+    return send(res, 200, out);
   }
 
   return send(res, 404, { error: "Not found" });

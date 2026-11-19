@@ -1,5 +1,5 @@
 name: Energie+
-version: "0.1.0"
+version: "0.2.0"
 slug: energy_plus
 description: Extra, more detailed energy dashboard next to the built-in Energy dashboard
 url: https://github.com/martijntalens/EnergyPlus
@@ -22,6 +22,8 @@ options:
   battery_soc_entity: ""
   co2_signal_entity: ""
   live_refresh_seconds: 5
+  household_size: 0
+  device_power_entities: []
 schema:
   grid_power_entity: str?
   grid_power_export_entity: str?
@@ -30,3 +32,6 @@ schema:
   battery_soc_entity: str?
   co2_signal_entity: str?
   live_refresh_seconds: int(2,60)?
+  household_size: int(0,12)?
+  device_power_entities:
+    - str

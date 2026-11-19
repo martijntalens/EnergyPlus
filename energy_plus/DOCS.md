@@ -10,14 +10,15 @@ more detail.
 | Section | Details |
 |---|---|
 | KPI tiles | Home consumption, grid import/export, solar, self-sufficiency, battery, net cost, fossil-free share, gas, water — each with change vs the previous period (measured at the same point in time for the running period). |
-| Live energy flow | Animated power flow between grid, solar, battery and home (needs power sensors, see options). |
+| Live energy flow | Animated power flow between grid, solar, home and **every device** with a power sensor (see *Live flow per device*). |
 | Sankey diagram | Where your energy came from and where it went, down to individual devices (including nested devices / "included in"). |
 | Energy balance | Stacked bars per hour/day/month: solar → home, battery → home, grid → home, export and battery charging, plus a dashed line for the previous period. Table view and CSV export. |
-| Devices | Ranking with share of total, or a stacked timeline. "Not separately measured" is shown explicitly. |
+| Devices | Ranking with share of total and **cost per device**, or a stacked timeline. "Not separately measured" is shown explicitly. |
 | Solar | Direct use, to battery, exported, self-consumption, best hour/day and the solar forecast (Forecast.Solar / Solcast, if configured). |
-| Costs & price | Electricity, gas, water costs and feed-in compensation; average price paid per kWh (useful with dynamic contracts); split per meter register (tariff 1/2). |
-| Load profile | Heatmap of average power per hour and weekday over the last 4 weeks. |
-| Insights | Standby (base) load and its yearly cost, peak moments, top consumer, self-consumption, battery effect, end of the Dutch net-metering scheme (*salderingsregeling*, 1 January 2027). |
+| Costs | Electricity, gas, water costs and feed-in compensation. |
+| Dal- en piektarief | Consumption, feed-in, net, price and cost per meter register: tariff 1 = *daltarief* (off-peak), tariff 2 = *piektarief* (peak). |
+| Insights | Standby load and its yearly cost, dal/piek share and what shifting the washing machine, dryer and dishwasher would save, peak and cheapest moments, top consumer, untracked share, weekend vs weekdays, night use, self-consumption, water per person. |
+| Fun facts | Your consumption translated into phone charges, cups of tea, EV kilometres, LED lamps, CO₂ saved by solar, showers and a comparison with an average Dutch household (rounded rules of thumb). |
 | Year calendar | Daily consumption heatmap; click a day to open it. |
 
 ## Options
@@ -33,11 +34,40 @@ All options are optional.
 | `battery_soc_entity` | Battery state of charge in %. |
 | `co2_signal_entity` | Fossil-fuel percentage sensor (Electricity Maps / CO2 Signal). Auto-detected when empty. |
 | `live_refresh_seconds` | Refresh interval of the live view (2–60 s). |
+| `household_size` | Number of people, for water use per person (0 = unknown). |
+| `device_power_entities` | Only when a device's power sensor is not found automatically. One entry per device: `energy_sensor=power_sensor`. |
 
 If the power sensors are configured in the Energy dashboard itself (newer HA versions),
 Energie+ picks them up automatically. Without a grid power sensor the live card is hidden.
 
-Example for a Dutch P1 (DSMR) meter:
+### Live flow per device
+
+For every device in the Energy dashboard's *Individual devices* list, Energie+ looks for a
+live power sensor (W/kW) in this order:
+
+1. The power sensor set for that device in the Energy settings (newer HA versions).
+2. The `device_power_entities` option.
+3. A power sensor on the same Home Assistant device as the energy sensor (smart plugs such
+   as Shelly, Tasmota, Zigbee plugs usually expose both).
+
+Devices without a power sensor are left out of the live view. The remainder of the home's
+power is shown as *Niet apart gemeten*.
+
+```yaml
+device_power_entities:
+  - sensor.wasmachine_energy=sensor.wasmachine_power
+  - sensor.vaatwasser_energy=sensor.vaatwasser_power
+```
+
+### Cost per device
+
+Cost = device consumption × the price of the tariff that applied in that hour (dal or
+piek). The tariff is taken from which meter register moved; if no register moved (e.g.
+everything came from solar) the usual Dutch schedule is used (dal: 23:00–07:00 and
+weekends). Prices come from the fixed price in the Energy settings, the price entity, or
+cost ÷ kWh of the cost statistics. Solar energy used directly is valued at the same tariff.
+
+### Example for a Dutch P1 (DSMR) meter
 
 ```yaml
 grid_power_entity: sensor.electricity_meter_power_consumption
@@ -51,6 +81,9 @@ solar_power_entity: sensor.inverter_ac_power
   `get_config`, `energy/get_prefs`, `energy/info`, `energy/solar_forecast`,
   `energy/fossil_energy_consumption`, `recorder/statistics_during_period`,
   `recorder/get_statistics_metadata`. Everything else is rejected with HTTP 403.
+  To find device power sensors the backend also reads the entity registry
+  (`config/entity_registry/list_for_display`) and the current states; it only returns the
+  matching sensor IDs to the browser.
 - The Supervisor token stays inside the app container; the browser never receives it.
 - Only reachable through Home Assistant Ingress (requests from other IPs are refused),
   so Home Assistant's own login and user access apply. No ports are exposed.

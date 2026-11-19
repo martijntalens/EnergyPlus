@@ -131,7 +131,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .banner.info { background: var(--surface); border-color: var(--border); }
 
 /* ---------- KPI tiles ---------- */
-.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin: 8px 0 14px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(190px, calc(50% - 6px)), 1fr)); gap: 12px; margin: 8px 0 14px; }
 .kpi {
   background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px 12px;
   box-shadow: var(--shadow); position: relative; overflow: hidden;
@@ -182,6 +182,18 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .dev .val { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dev .val small { color: var(--muted); margin-left: 6px; }
 
+.facts { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr; gap: 10px; }
+.facts li { display: grid; grid-template-columns: 44px 1fr; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); }
+.facts .big { font-size: 26px; text-align: center; }
+.facts b { display: block; font-size: 15px; font-variant-numeric: tabular-nums; }
+.facts span { color: var(--ink-2); font-size: 12.5px; }
+.tariff-tbl td.k { font-weight: 600; }
+.tariff-tbl td.k i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; }
+.dev .val .cost { color: var(--ink); font-weight: 600; margin-left: 10px; min-width: 64px; display: inline-block; text-align: right; }
+.live-flow .pill rect.bg { fill: var(--surface-2); }
+.live-flow .pill text { font-size: 12px; fill: var(--ink); dominant-baseline: middle; }
+.live-flow .pill text.w { font-variant-numeric: tabular-nums; font-weight: 600; text-anchor: end; }
+.live-flow .pill text.muted { fill: var(--muted); }
 .tariff-split { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .tariff-split .row { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-size: 12px; color: var(--ink-2); }
 .tariff-split .stack { grid-column: 1 / -1; display: flex; height: 10px; border-radius: 999px; overflow: hidden; gap: 2px; background: var(--surface-2); }
@@ -205,7 +217,9 @@ th:first-child, td:first-child { text-align: left; }
 thead th { position: sticky; top: 0; background: var(--surface); color: var(--ink-2); font-weight: 600; }
 
 /* ---------- live flow ---------- */
-.live-flow svg { width: 100%; height: auto; display: block; max-height: 380px; }
+.live-flow { overflow-x: auto; }
+.live-flow svg { width: 100%; min-width: 620px; height: auto; display: block; }
+@media (max-width: 600px) { .kpi .value { font-size: 22px; } .kpi { padding: 12px; } .kpi .ring { width: 30px; height: 30px; } }
 .live-flow .node circle { fill: var(--surface); stroke-width: 3; }
 .live-flow .node .t1 { font-size: 13px; font-weight: 650; fill: var(--ink); text-anchor: middle; font-variant-numeric: tabular-nums; }
 .live-flow .node .t2 { font-size: 11px; fill: var(--ink-2); text-anchor: middle; }
