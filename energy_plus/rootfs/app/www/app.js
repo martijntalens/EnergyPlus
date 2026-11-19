@@ -159,6 +159,9 @@ function realApi(boot) {
       fetch("api/ws", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(msg) }).then(json),
     states: (ids) => fetch(`api/states?ids=${encodeURIComponent(ids.join(","))}`).then(json),
     autodetect: () => fetch("api/autodetect").then(json),
+    getSettings: () => fetch("api/settings", { cache: "no-store" }).then(json),
+    saveSettings: (data) =>
+      fetch("api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }).then(json),
     devicePower: (ids) =>
       fetch("api/device_power", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) }).then(json),
   };
@@ -266,19 +269,23 @@ function tariffWeights(r, hourly) {
   }
   return w;
 }
-/** Price per kWh for each tariff: fixed price from the Energy settings, else derived from the cost statistics. */
+/**
+ * Price per kWh for each tariff. Historic cost statistics first (they follow price changes
+ * over time), then the fixed price from the Energy settings, then the current price entity.
+ */
 function tariffPrices(records) {
   const prices = {}, kwh = {}, cost = {};
-  for (const g of model.gridIn) {
-    if (g.fixedPrice != null) prices[g.tariff] = g.fixedPrice;
-    else if (livePrices[g.priceEntity] != null) prices[g.tariff] = livePrices[g.priceEntity];
-  }
   for (const r of records)
     for (const g of model.gridIn) {
       kwh[g.tariff] = (kwh[g.tariff] || 0) + clamp0(r.tariffIn[g.id] || 0);
       cost[g.tariff] = (cost[g.tariff] || 0) + (r.costIn[g.id] || 0);
     }
-  for (const k of Object.keys(kwh)) if (prices[k] == null && kwh[k] > 0.05 && cost[k] > 0) prices[k] = cost[k] / kwh[k];
+  for (const k of Object.keys(kwh)) if (kwh[k] > 0.05 && cost[k] > 0) prices[k] = cost[k] / kwh[k];
+  for (const g of model.gridIn) {
+    if (prices[g.tariff] != null) continue;
+    if (g.fixedPrice != null) prices[g.tariff] = g.fixedPrice;
+    else if (livePrices[g.priceEntity] != null) prices[g.tariff] = livePrices[g.priceEntity];
+  }
   return prices;
 }
 const SHIFTABLE = /was|droger|droog|vaatwas|dish|wash|dryer|boiler/i;
@@ -1086,6 +1093,294 @@ async function renderCalendar() {
   });
 }
 
+/* ---------- Annual bill forecast ---------- */
+let settings = {}, billData = null, cycleData = null, liveDevW = {};
+const billCache = { key: null, at: 0, data: null };
+function billWindow() {
+  const [y, m, d] = String(settings.bill_start || "").split("-").map(Number);
+  if (!y || !m || !d) return null;
+  const now = new Date();
+  let s = new Date(now.getFullYear(), m - 1, d);
+  if (s > now) s = new Date(now.getFullYear() - 1, m - 1, d);
+  return { s, e: new Date(s.getFullYear() + 1, m - 1, d) };
+}
+async function loadBill() {
+  const w = billWindow();
+  if (!w || settings.monthly_payment == null) return null;
+  const key = `${w.s.getTime()}|${JSON.stringify(settings)}`;
+  if (billCache.key === key && Date.now() - billCache.at < 10 * 60e3) return billCache.data;
+  const days = makeBuckets("month", w.s, w.e);
+  const ps = new Date(w.s.getFullYear() - 1, w.s.getMonth(), w.s.getDate());
+  const pdays = makeBuckets("month", ps, w.s);
+  const [cur, prev] = await Promise.all([fetchAll(w.s, new Date(Math.min(Date.now(), w.e)), "day"), fetchAll(ps, w.s, "day")]);
+  const data = { w, days, C: compute(model, cur, days.map((b) => b.start)), P: compute(model, prev, pdays.map((b) => b.start)) };
+  Object.assign(billCache, { key, at: Date.now(), data });
+  return data;
+}
+const monthsBetween = (a, b) => (b.getFullYear() - a.getFullYear()) * 12 + b.getMonth() - a.getMonth() - (b.getDate() < a.getDate() ? 1 : 0);
+
+function renderBill(data) {
+  $("#card-bill").hidden = !(model.hasCost || model.gas.some((g) => g.cost) || settings.bill_start);
+  const body = $("#bill-body");
+  const w = billWindow();
+  $("#bill-period").textContent = w ? `${w.s.toLocaleDateString(LOCALE, { day: "numeric", month: "short", year: "numeric" })} – ${new Date(w.e - 864e5).toLocaleDateString(LOCALE, { day: "numeric", month: "short", year: "numeric" })}` : "";
+  $("#chart-bill").hidden = true;
+  if (!w || settings.monthly_payment == null) {
+    body.innerHTML = `<div class="empty">Vul via <b>Instellen</b> je termijnbedrag, vaste kosten en de start van je afrekenjaar in. Dan voorspelt Energie+ of je bij de jaarafrekening geld terugkrijgt of moet bijbetalen.</div>`;
+    return;
+  }
+  if (!model.hasCost && !model.gas.some((g) => g.cost)) {
+    body.innerHTML = `<div class="empty">Er zijn nog geen prijzen ingesteld in de Energie-instellingen van Home Assistant, dus de verbruikskosten zijn onbekend.</div>`;
+    return;
+  }
+  if (!data) return;
+  const { days, C, P } = data;
+  const n = days.length, now = Date.now();
+  const starts = days.map((b) => b.start);
+  const ti = Math.max(0, Math.min(n - 1, bucketIndex(starts, now)));
+  const dayFrac = Math.min(1, (now - starts[ti]) / 864e5);
+  const streams = { elec: (b) => b.cost - b.comp, gas: (b) => b.gasCost };
+  const fc = {}, methods = new Set();
+  for (const [k, fn] of Object.entries(streams)) {
+    const actual = C.buckets.map((b) => (b.n ? fn(b) : 0));
+    let both = 0, bothPrev = 0, done = 0;
+    for (let i = 0; i < ti; i++) {
+      done += actual[i];
+      if (P.buckets[i]?.n && C.buckets[i].n) (both += actual[i]), (bothPrev += fn(P.buckets[i]));
+    }
+    const remainIdx = [...Array(n).keys()].filter((i) => i >= ti);
+    const cov = remainIdx.filter((i) => P.buckets[i]?.n).length / Math.max(1, remainIdx.length);
+    const per = new Array(n).fill(0);
+    if (cov >= 0.8) {
+      const trend = Math.abs(bothPrev) > 20 ? Math.min(1.5, Math.max(0.6, both / bothPrev)) : 1;
+      const lyAvg = sum(remainIdx.filter((i) => P.buckets[i]?.n), (i) => fn(P.buckets[i])) / Math.max(1, remainIdx.filter((i) => P.buckets[i]?.n).length);
+      for (const i of remainIdx) per[i] = (P.buckets[i]?.n ? fn(P.buckets[i]) : lyAvg) * trend;
+      methods.add("ly");
+    } else {
+      const avg = done / Math.max(1, ti);
+      for (const i of remainIdx) per[i] = avg;
+      methods.add("avg");
+    }
+    per[ti] *= 1 - dayFrac;
+    fc[k] = { actual, per, actualSum: sum(actual), fcSum: sum(per) };
+  }
+  const fixedYear = ((settings.fixed_elec_month || 0) + (settings.fixed_gas_month || 0)) * 12 - (settings.tax_reduction_year || 0);
+  const fixedDay = fixedYear / n;
+  const varActual = fc.elec.actualSum + fc.gas.actualSum;
+  const varFc = fc.elec.fcSum + fc.gas.fcSum;
+  const expected = varActual + varFc + fixedYear;
+  const monthly = settings.monthly_payment;
+  const paidYear = monthly * 12;
+  const termsPaid = Math.min(12, monthsBetween(data.w.s, new Date()) + 1);
+  const paidSoFar = monthly * termsPaid;
+  const diff = paidYear - expected;
+  const remainingTerms = 12 - termsPaid;
+  const neededMonthly = remainingTerms > 0 ? (expected - paidSoFar) / remainingTerms : null;
+  const soFar = varActual + fixedDay * (ti + dayFrac);
+  const good = diff >= 0;
+  body.innerHTML = `
+    <div class="bill-tiles">
+      <div class="hero" style="--status:var(${good ? "--good" : "--bad"});--status-ink:var(${good ? "--good" : "--bad"})">
+        <div class="l">${good ? "✓ Verwacht terug te krijgen" : "! Verwacht bij te betalen"}</div>
+        <div class="v">${money(Math.abs(diff), 0)}</div>
+        <div class="s">bij de jaarafrekening</div>
+      </div>
+      <div><div class="l">Verwachte jaarkosten</div><div class="v">${money(expected, 0)}</div>
+        <div class="s">stroom ${money(fc.elec.actualSum + fc.elec.fcSum, 0)} · gas ${money(fc.gas.actualSum + fc.gas.fcSum, 0)} · vast ${money(fixedYear, 0)}</div></div>
+      <div><div class="l">Termijnen</div><div class="v">${money(paidYear, 0)}</div>
+        <div class="s">${money(monthly)} per maand · ${termsPaid} van 12 betaald</div></div>
+      <div><div class="l">Kosten tot nu</div><div class="v">${money(soFar, 0)}</div>
+        <div class="s">dag ${ti + 1} van ${n} · betaald ${money(paidSoFar, 0)}</div></div>
+      <div><div class="l">Advies termijnbedrag</div><div class="v">${neededMonthly != null ? money(Math.max(0, neededMonthly), 0) : money(expected / 12, 0)}</div>
+        <div class="s">${neededMonthly != null ? `om op € 0 uit te komen, voor de resterende ${remainingTerms} ${remainingTerms === 1 ? "termijn" : "termijnen"}` : "per maand voor het volgende jaar"}</div></div>
+    </div>
+    <p class="bill-note">${methods.has("ly") && !methods.has("avg") ? "Prognose: je verbruik van dezelfde periode vorig jaar, gecorrigeerd voor hoe je dit jaar tot nu toe verbruikt." : methods.has("ly") ? "Prognose deels op vorig jaar, deels op je gemiddelde tot nu toe (nog geen volledige historie)." : "Nog geen volledig jaar historie: de prognose gebruikt je gemiddelde tot nu toe, zonder seizoenseffecten (gas in de winter). Hij wordt nauwkeuriger naarmate er meer data is."} Prijswijzigingen in je contract worden alleen meegenomen als je ze ook in de Energie-instellingen aanpast.</p>`;
+
+  // Cumulative chart: actual, forecast, payments
+  const act = [], fcs = [], pay = [];
+  let cum = 0;
+  for (let i = 0; i < n; i++) {
+    const t = starts[i] + 864e5;
+    if (i <= ti) {
+      cum += fc.elec.actual[i] + fc.gas.actual[i] + fixedDay * (i === ti ? dayFrac : 1);
+      act.push([Math.min(t, now), cum]);
+      if (i === ti) fcs.push([Math.min(t, now), cum]);
+    }
+    if (i >= ti) {
+      cum += fc.elec.per[i] + fc.gas.per[i] + fixedDay * (i === ti ? 1 - dayFrac : 1);
+      fcs.push([t, cum]);
+    }
+    pay.push([starts[i], monthly * Math.min(12, monthsBetween(data.w.s, new Date(starts[i])) + 1)]);
+  }
+  pay.push([data.w.e.getTime(), paidYear]);
+  $("#chart-bill").hidden = false;
+  setChart("chart-bill", {
+    ...base(),
+    legend: legend(),
+    tooltip: tooltipBase({
+      trigger: "axis",
+      formatter: (ps) =>
+        `<div style="font-weight:600;margin-bottom:4px">${new Date(ps[0].value[0]).toLocaleDateString(LOCALE, { day: "numeric", month: "long", year: "numeric" })}</div>` +
+        ps.map((p) => `<div style="display:flex;justify-content:space-between;gap:18px"><span>${swatch(p.color)}${esc(p.seriesName)}</span><b>${money(p.value[1], 0)}</b></div>`).join(""),
+    }),
+    xAxis: { type: "time", axisLine: { lineStyle: { color: css("--axis") } }, axisTick: { show: false }, axisLabel: { color: css("--muted"), fontSize: 11, formatter: (v) => MONTHS[new Date(v).getMonth()] }, splitLine: { show: false } },
+    yAxis: valAxis((v) => money(v, 0)),
+    series: [
+      { name: "Kosten tot nu", type: "line", data: act, symbol: "none", lineStyle: { width: 2.5, color: css("--grid-in") }, itemStyle: { color: css("--grid-in") }, areaStyle: { color: css("--grid-in"), opacity: 0.08 } },
+      { name: "Prognose", type: "line", data: fcs, symbol: "none", lineStyle: { width: 2, type: "dashed", color: css("--grid-in") }, itemStyle: { color: css("--grid-in") } },
+      { name: "Betaalde termijnen", type: "line", step: "end", data: pay, symbol: "none", lineStyle: { width: 2, color: css("--ink-2") }, itemStyle: { color: css("--ink-2") } },
+    ],
+  });
+}
+
+function openBillForm(open) {
+  const f = $("#bill-form");
+  f.hidden = !open;
+  if (!open) return;
+  for (const el of f.querySelectorAll("input")) el.value = settings[el.name] ?? "";
+  $("#bill-save-msg").textContent = "";
+}
+async function saveBillForm(e) {
+  e.preventDefault();
+  const data = {};
+  for (const el of $("#bill-form").querySelectorAll("input")) if (el.value !== "") data[el.name] = el.type === "number" ? Number(el.value) : el.value;
+  try {
+    settings = await api.saveSettings(data);
+    openBillForm(false);
+    billCache.key = null;
+    billData = await loadBill();
+    renderBill(billData);
+  } catch (err) {
+    $("#bill-save-msg").textContent = `Opslaan mislukt: ${err.message}`;
+  }
+}
+
+/* ---------- Appliance cycles ---------- */
+const CYCLE_RE = /was|droger|droog|vaatwas|dish|wash|dryer|oven|airfryer/i;
+const cycleCache = new Map();
+async function loadCycles() {
+  const devs = model.devices.filter((d) => CYCLE_RE.test(devName(d)));
+  if (!devs.length) return null;
+  const end = new Date(Math.min(D.end.getTime(), Date.now()));
+  end.setMinutes(0, 0, 0);
+  const key = `${D.start.getTime()}-${end.getTime()}`;
+  if (!cycleCache.has(key)) {
+    const ids = [...devs.map((d) => d.id), ...model.gridIn.flatMap((g) => [g.id, g.cost]), ...model.gridOut.map((g) => g.id)];
+    const raw = await stats(ids, D.start, end, "hour", { energy: "kWh" });
+    const C = compute(model, raw, [D.start.getTime()]);
+    cycleCache.set(key, {
+      devs,
+      days: Math.max(1 / 24, (end - D.start) / 864e5),
+      runs: Object.fromEntries(devs.map((d) => [d.id, detectRuns(C.records, d.id)])),
+    });
+  }
+  return cycleCache.get(key);
+}
+/** A run = consecutive hours above the device's standby level (1 quiet hour inside a run is allowed). */
+function detectRuns(records, id) {
+  const pts = records.map((r) => ({ ts: r.ts, e: clamp0(r.dev[id] || 0), c: r.devCost[id] || 0, r }));
+  if (pts.length < 3) return [];
+  const sorted = pts.map((p) => p.e).sort((a, b) => a - b);
+  const standby = sorted[Math.floor(sorted.length * 0.2)] || 0;
+  const thr = Math.max(0.05, standby * 3 + 0.02);
+  const runs = [];
+  let cur = null;
+  const addHour = (p) => {
+    const w = tariffWeights(p.r, true);
+    cur.kwh += clamp0(p.e - standby);
+    cur.raw += p.e;
+    cur.cost += p.c;
+    cur.dal += (w.dal || 0) * p.e;
+    cur.end = p.ts;
+    cur.hours++;
+  };
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    if (cur && p.ts - cur.end > 1.5 * 3600e3) (runs.push(cur), (cur = null));
+    if (p.e > thr) {
+      if (!cur) cur = { start: p.ts, end: p.ts, kwh: 0, raw: 0, cost: 0, dal: 0, hours: 0 };
+      addHour(p);
+    } else if (cur) {
+      const nx = pts[i + 1];
+      if (nx && nx.e > thr && nx.ts - p.ts <= 1.5 * 3600e3) addHour(p);
+      else (runs.push(cur), (cur = null));
+    }
+  }
+  if (cur) runs.push(cur);
+  return runs.filter((r) => r.kwh >= 0.1);
+}
+function updateCycleChips() {
+  $$("[data-cycle-now]").forEach((el) => {
+    const w = liveDevW[el.dataset.cycleNow];
+    el.hidden = !(w > 10);
+    if (w > 10) el.textContent = `draait nu · ${num(w, 0)} W`;
+  });
+}
+function renderCycles(data) {
+  const card = $("#card-cycles");
+  card.hidden = !data;
+  if (!data) return;
+  const hasDal = (model.tariffKeys || []).includes("dal");
+  const withCost = D.C.havePrice;
+  const fmtStart = (ts) => {
+    const d = new Date(ts);
+    return `${DOW_SHORT[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}, ${String(d.getHours()).padStart(2, "0")}:00`;
+  };
+  const rows = data.devs.map((d) => {
+    const runs = data.runs[d.id] || [];
+    const kwhT = sum(runs, (r) => r.kwh), costT = sum(runs, (r) => r.cost), rawT = sum(runs, (r) => r.raw), dalT = sum(runs, (r) => r.dal);
+    const hours = runs.map((r) => new Date(r.start).getHours()).sort((a, b) => a - b);
+    const last = runs[runs.length - 1];
+    return `<tr>
+      <td><span class="dot" style="display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px;background:${css(d.slot)}"></span>${esc(devName(d))}<span class="chip" data-cycle-now="${esc(d.id)}" hidden></span></td>
+      <td>${runs.length}</td>
+      ${data.days >= 7 ? `<td>${num(runs.length / (data.days / 7), 1)}</td>` : ""}
+      <td>${runs.length ? kwh(kwhT / runs.length) : "–"}</td>
+      ${withCost ? `<td>${runs.length ? money(costT / runs.length) : "–"}</td><td>${money(costT)}</td>` : ""}
+      ${hasDal ? `<td>${rawT > 0 ? pct(dalT / rawT) : "–"}</td>` : ""}
+      <td>${hours.length ? `${String(hours[Math.floor(hours.length / 2)]).padStart(2, "0")}:00` : "–"}</td>
+      <td>${last ? fmtStart(last.start) : "–"}</td></tr>`;
+  });
+  const head = ["Apparaat", "Beurten", ...(data.days >= 7 ? ["Per week"] : []), "kWh per beurt", ...(withCost ? ["Kosten per beurt", "Kosten totaal"] : []), ...(hasDal ? ["In dal"] : []), "Meestal om", "Laatste keer"];
+  $("#cycles-table").innerHTML = `<table><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
+  updateCycleChips();
+
+  const series = data.devs.map((d, si) => ({
+    name: devName(d),
+    type: "scatter",
+    data: (data.runs[d.id] || []).map((r) => {
+      const t = new Date(r.start);
+      return { value: [r.start, t.getHours() + 0.5], run: r };
+    }),
+    symbolSize: (v, p) => Math.max(9, Math.min(22, 8 + (p.data.run.kwh || 0) * 6)),
+    itemStyle: { color: css(d.slot), borderColor: css("--surface"), borderWidth: 2, opacity: 0.9 },
+    ...(si === 0
+      ? {
+          markArea: {
+            silent: true,
+            itemStyle: { color: css("--ink-2"), opacity: 0.06 },
+            label: { color: css("--muted"), fontSize: 11, position: "insideTopLeft" },
+            data: [[{ yAxis: 0, name: "dal" }, { yAxis: 7 }], [{ yAxis: 23, name: "dal" }, { yAxis: 24 }]],
+          },
+        }
+      : {}),
+  }));
+  setChart("chart-cycles", {
+    ...base(),
+    legend: legend(),
+    tooltip: tooltipBase({
+      trigger: "item",
+      formatter: (p) => {
+        const r = p.data.run;
+        return `<b>${esc(p.seriesName)}</b><br>${fmtStart(r.start)} · ${r.hours} uur<br>${kwh(r.kwh)}${withCost ? ` · ${money(r.cost)}` : ""}${hasDal ? `<br>${pct(r.dal / (r.raw || 1))} in daltarief` : ""}`;
+      },
+    }),
+    xAxis: { type: "time", min: D.start.getTime(), max: D.end.getTime(), axisLine: { lineStyle: { color: css("--axis") } }, axisTick: { show: false }, axisLabel: { color: css("--muted"), fontSize: 11, hideOverlap: true }, splitLine: { show: false } },
+    yAxis: { type: "value", min: 0, max: 24, interval: 3, inverse: true, axisLabel: { color: css("--muted"), fontSize: 11, formatter: (v) => `${String(v).padStart(2, "0")}:00` }, splitLine: { lineStyle: { color: css("--grid") } } },
+    series,
+  });
+}
+
 /* ---------- Insights ---------- */
 function renderInsights() {
   const T = D.C.total, B = D.C.buckets, out = [];
@@ -1287,6 +1582,8 @@ function setupLive() {
       const dev = {};
       for (const d of devs) dev[d.id] = Math.max(0, w(devPower[d.id]));
       drawLive({ grid, solar, battery, soc, hasSolar: !!E.solar, hasBattery: !!E.battery, devs, dev });
+      liveDevW = dev;
+      updateCycleChips();
       $("#live-updated").textContent = `bijgewerkt ${new Date().toLocaleTimeString(LOCALE)}`;
     } catch (e) {
       $("#live-updated").textContent = "geen live-data";
@@ -1426,6 +1723,8 @@ async function reload({ silent = false } = {}) {
     else if (!api.demo) banner("");
     await Promise.all([
       loadProfile().then((r) => (D.profileRecs = r)).catch((e) => console.warn("profile", e)),
+      loadBill().then((b) => renderBill((billData = b))).catch((e) => (console.warn("bill", e), renderBill(null))),
+      loadCycles().then((c) => renderCycles((cycleData = c))).catch((e) => console.warn("cycles", e)),
       renderCalendar().catch((e) => console.warn("calendar", e)),
     ]);
     renderInsights();
@@ -1458,6 +1757,8 @@ function wireUi() {
   $("#refresh").addEventListener("click", () => {
     cache.calendar.clear();
     cache.profile.clear();
+    cycleCache.clear();
+    billCache.key = null;
     reload();
   });
   $("#compare").addEventListener("change", (e) => {
@@ -1475,6 +1776,8 @@ function wireUi() {
     if (D) {
       renderAll();
       renderCalendar().catch(() => {});
+      renderBill(billData);
+      renderCycles(cycleData);
       setupLive();
     }
   });
@@ -1489,6 +1792,9 @@ function wireUi() {
     )
   );
   $("#csv").addEventListener("click", exportCsv);
+  $("#bill-edit").addEventListener("click", () => openBillForm($("#bill-form").hidden));
+  $("#bill-cancel").addEventListener("click", () => openBillForm(false));
+  $("#bill-form").addEventListener("submit", saveBillForm);
   document.addEventListener("keydown", (e) => {
     if (e.target.closest("input, textarea")) return;
     if (e.key === "ArrowLeft") $("#prev").click();
@@ -1521,6 +1827,7 @@ async function init() {
     for (const x of md || []) meta[x.statistic_id] = { name: x.name || x.statistic_id, unit: x.statistics_unit_of_measurement || x.display_unit_of_measurement };
     classifyTariffs(model);
     co2Entity = api.options?.co2_signal_entity || (await api.autodetect().catch(() => ({}))).co2_signal_entity || "";
+    settings = (await api.getSettings?.().catch(() => ({}))) || {};
     await resolveDevicePower();
     const priceEnts = model.gridIn.map((g) => g.priceEntity).filter(Boolean);
     if (priceEnts.length) {

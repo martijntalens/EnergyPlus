@@ -31,6 +31,37 @@ const ALLOWED_WS = new Set([
   "recorder/get_statistics_metadata",
 ]);
 
+// Dashboard settings (e.g. contract details for the annual bill forecast), stored in the
+// app's own persistent /data folder. Nothing is written to Home Assistant itself.
+const SETTINGS_FILE = process.env.SETTINGS_FILE || "/data/settings.json";
+const SETTINGS_FIELDS = {
+  bill_start: (v) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : ""),
+  monthly_payment: (v) => num(v, 0, 10000),
+  fixed_elec_month: (v) => num(v, -1000, 1000),
+  fixed_gas_month: (v) => num(v, -1000, 1000),
+  tax_reduction_year: (v) => num(v, 0, 10000),
+};
+function num(v, min, max) {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= min && n <= max ? Math.round(n * 100) / 100 : null;
+}
+function readSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+function writeSettings(input) {
+  const out = {};
+  for (const [k, clean] of Object.entries(SETTINGS_FIELDS)) {
+    const v = clean(input?.[k]);
+    if (v !== null && v !== "") out[k] = v;
+  }
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(out, null, 2), { mode: 0o600 });
+  return out;
+}
+
 function readOptions() {
   try {
     return JSON.parse(fs.readFileSync("/data/options.json", "utf8"));
@@ -189,6 +220,9 @@ async function handleApi(req, res, url) {
   }
 
   if (DEMO) return send(res, 409, { error: "demo mode" });
+
+  if (route === "settings" && req.method === "GET") return send(res, 200, readSettings());
+  if (route === "settings" && req.method === "PUT") return send(res, 200, writeSettings(await readBody(req, 16 * 1024)));
 
   if (route === "ws" && req.method === "POST") {
     const body = await readBody(req);

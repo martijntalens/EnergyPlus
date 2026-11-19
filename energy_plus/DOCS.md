@@ -19,6 +19,8 @@ more detail.
 | Dal- en piektarief | Consumption, feed-in, net, price and cost per meter register: tariff 1 = *daltarief* (off-peak), tariff 2 = *piektarief* (peak). |
 | Insights | Standby load and its yearly cost, dal/piek share and what shifting the washing machine, dryer and dishwasher would save, peak and cheapest moments, top consumer, untracked share, weekend vs weekdays, night use, self-consumption, water per person. |
 | Fun facts | Your consumption translated into phone charges, cups of tea, EV kilometres, LED lamps, CO₂ saved by solar, showers and a comparison with an average Dutch household (rounded rules of thumb). |
+| Annual bill forecast | Predicts your *jaarafrekening*: expected yearly cost (variable + fixed − energy tax reduction) against your monthly payments, with an advised monthly amount. |
+| Appliance cycles | Washing machine, dryer, dishwasher (and oven/airfryer) runs: count, per week, kWh and cost per run, share in daltarief, usual start time, last run, "running now". |
 | Year calendar | Daily consumption heatmap; click a day to open it. |
 
 ## Options
@@ -59,13 +61,41 @@ device_power_entities:
   - sensor.vaatwasser_energy=sensor.vaatwasser_power
 ```
 
+### Annual bill forecast
+
+Click **Instellen** on the card and enter, all including VAT:
+
+| Field | Where to find it |
+|---|---|
+| Start afrekenjaar | Start date of your billing year (contract or last annual bill) |
+| Termijnbedrag per maand | Your monthly advance payment for electricity + gas |
+| Vaste kosten stroom / gas per maand | Standing charge (*vastrecht*) + grid operator costs (*netbeheerkosten*) |
+| Vermindering energiebelasting per jaar | On your annual bill |
+
+The values are stored only in this app's `/data` folder on your Home Assistant (included
+in Home Assistant backups). Variable costs come from the cost statistics of the Energy
+dashboard, so set all-in prices there (including energy tax and VAT).
+
+Forecast method: the remaining days of the billing year use the same days of last year,
+scaled by how this year compares to last year so far (limited to ×0.6–×1.5). Without a
+year of history the average so far is used, which does not account for seasonal gas use.
+
+### Appliance cycles
+
+Devices whose name contains *was*, *droger*, *vaatwas*, *oven*, *airfryer* (or English
+equivalents) are analysed. A run is a sequence of hours above the device's standby level;
+one quiet hour inside a run is allowed. Because hourly statistics are used, two programs
+that run directly after each other can be counted as one run. The "running now" badge
+needs a live power sensor (see *Live flow per device*).
+
 ### Cost per device
 
 Cost = device consumption × the price of the tariff that applied in that hour (dal or
 piek). The tariff is taken from which meter register moved; if no register moved (e.g.
 everything came from solar) the usual Dutch schedule is used (dal: 23:00–07:00 and
-weekends). Prices come from the fixed price in the Energy settings, the price entity, or
-cost ÷ kWh of the cost statistics. Solar energy used directly is valued at the same tariff.
+weekends). Prices per tariff come from the cost statistics (cost ÷ kWh for the period shown),
+so price changes over time are respected; when there are no cost statistics, the fixed
+price or price entity from the Energy settings is used. Solar energy used directly is valued at the same tariff.
 
 ### Example for a Dutch P1 (DSMR) meter
 

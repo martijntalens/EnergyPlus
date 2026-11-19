@@ -201,6 +201,20 @@ export function createDemoApi() {
       household_size: 3,
       device_power_entities: [],
     },
+    async getSettings() {
+      try {
+        const v = localStorage.getItem("energyplus.demoSettings");
+        if (v) return JSON.parse(v);
+      } catch {}
+      const y = new Date().getFullYear();
+      return { bill_start: `${new Date().getMonth() >= 3 ? y : y - 1}-04-01`, monthly_payment: 165, fixed_elec_month: 38.5, fixed_gas_month: 24.75, tax_reduction_year: 628.96 };
+    },
+    async saveSettings(data) {
+      try {
+        localStorage.setItem("energyplus.demoSettings", JSON.stringify(data));
+      } catch {}
+      return data;
+    },
     async devicePower(ids) {
       const out = {};
       for (const id of ids) if (EXTRACT[id]) out[id] = id.replace(/_energy$/, "_power");

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0
+- Annual bill forecast (*jaarafrekening-voorspeller*): enter your monthly payment, fixed
+  costs and the start of your billing year in the dashboard; Energie+ predicts the refund
+  or extra payment and advises a monthly amount. Settings are stored in the app's own
+  `/data` folder.
+- Appliance cycles: washing machine, dryer and dishwasher runs detected from hourly
+  energy statistics, with runs per week, kWh and cost per run, share in daltarief,
+  usual start time and a "running now" badge when a power sensor is available.
+- Prices: historic cost statistics now take precedence over the fixed price, so past
+  periods are valued at the prices that applied then.
+
 ## 0.2.0
 - Live energy flow per device: animated flows from the home to every device that has a
   power sensor (found automatically on the same Home Assistant device, or set via the

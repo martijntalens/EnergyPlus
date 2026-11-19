@@ -60,6 +60,30 @@
           <div class="chart" id="chart-sankey" style="height:380px"></div>
         </article>
 
+        <article class="card span-12" id="card-bill">
+          <header>
+            <h2>Jaarafrekening-voorspeller</h2>
+            <div class="card-actions">
+              <span class="hint" id="bill-period"></span>
+              <button class="ghost-btn small" id="bill-edit">Instellen</button>
+            </div>
+          </header>
+          <form class="settings-form" id="bill-form" hidden>
+            <p class="card-sub">Deze gegevens vind je in je contract, je laatste jaarafrekening of de app van je energieleverancier. Bedragen inclusief btw. Ze worden alleen in deze app op je eigen Home Assistant opgeslagen.</p>
+            <div class="fields">
+              <label>Start afrekenjaar<input type="date" name="bill_start" required /><small>Datum waarop je jaarafrekening ingaat</small></label>
+              <label>Termijnbedrag per maand (€)<input type="number" name="monthly_payment" step="0.01" min="0" required /><small>Stroom + gas samen</small></label>
+              <label>Vaste kosten stroom per maand (€)<input type="number" name="fixed_elec_month" step="0.01" /><small>Vastrecht + netbeheerkosten</small></label>
+              <label>Vaste kosten gas per maand (€)<input type="number" name="fixed_gas_month" step="0.01" /><small>Vastrecht + netbeheerkosten</small></label>
+              <label>Vermindering energiebelasting per jaar (€)<input type="number" name="tax_reduction_year" step="0.01" min="0" /><small>Staat op je jaarafrekening</small></label>
+            </div>
+            <p class="card-sub">De verbruikskosten komen uit je Energie-instellingen in Home Assistant. Zorg dat daar de all-in prijzen per kWh en m³ staan (inclusief energiebelasting en btw).</p>
+            <div class="form-actions"><button type="submit" class="primary-btn">Opslaan</button><button type="button" class="ghost-btn" id="bill-cancel">Annuleren</button><span class="hint" id="bill-save-msg"></span></div>
+          </form>
+          <div id="bill-body"></div>
+          <div class="chart" id="chart-bill" style="height:260px"></div>
+        </article>
+
         <article class="card span-12" id="card-balance">
           <header>
             <h2>Energiebalans</h2>
@@ -106,6 +130,12 @@
           <p class="card-sub">Afname en teruglevering per telwerk: tarief 1 = dal, tarief 2 = piek.</p>
           <div id="tariff-table" class="table-wrap"></div>
           <div class="chart" id="chart-tariff" style="height:220px"></div>
+        </article>
+
+        <article class="card span-12" id="card-cycles" hidden>
+          <header><h2>Apparaatcycli</h2><span class="hint">Starttijd per beurt, herkend uit het uurverbruik · dal = 23–7 uur en weekend</span></header>
+          <div id="cycles-table" class="table-wrap"></div>
+          <div class="chart" id="chart-cycles" style="height:260px"></div>
         </article>
 
         <article class="card span-7" id="card-insights">
