@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+- Live flow: warning when the measured devices together use more power than the whole
+  home (solar + grid), instead of silently showing 0 W for "Niet apart gemeten" (now "?").
+- Live flow: sensors that show power but have not reported for more than 5 minutes are
+  marked with ⏱ and their age; the warning names them as the likely cause.
+
 ## 0.3.0
 - Annual bill forecast (*jaarafrekening-voorspeller*): enter your monthly payment, fixed
   costs and the start of your billing year in the dashboard; Energie+ predicts the refund

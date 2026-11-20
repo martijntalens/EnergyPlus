@@ -1581,7 +1581,28 @@ function setupLive() {
       const soc = E.soc && st[E.soc] ? parseFloat(st[E.soc].state) : null;
       const dev = {};
       for (const d of devs) dev[d.id] = Math.max(0, w(devPower[d.id]));
-      drawLive({ grid, solar, battery, soc, hasSolar: !!E.solar, hasBattery: !!E.battery, devs, dev });
+      // Freshness: a sensor that shows real power but has not reported for a while is suspect.
+      const ageOf = (id) => {
+        const t = Date.parse(st[id]?.last_reported || st[id]?.last_updated || "");
+        return Number.isFinite(t) ? Math.max(0, Date.now() - t) : null;
+      };
+      const fresh = (list) => {
+        let age = null, stale = false;
+        for (const id of list.filter(Boolean)) {
+          const a = ageOf(id);
+          if (a == null) continue;
+          age = Math.max(age ?? 0, a);
+          if (a > LIVE_STALE_MS && Math.abs(w(id)) > 5) stale = true;
+        }
+        return { age, stale };
+      };
+      const freshness = {
+        grid: fresh([E.grid, E.gridExport]),
+        solar: fresh([E.solar]),
+        battery: fresh([E.battery]),
+        dev: Object.fromEntries(devs.map((d) => [d.id, fresh([devPower[d.id]])])),
+      };
+      drawLive({ grid, solar, battery, soc, hasSolar: !!E.solar, hasBattery: !!E.battery, devs, dev, freshness });
       liveDevW = dev;
       updateCycleChips();
       $("#live-updated").textContent = `bijgewerkt ${new Date().toLocaleTimeString(LOCALE)}`;
@@ -1592,7 +1613,14 @@ function setupLive() {
   tick();
   liveTimer = setInterval(tick, Math.max(2, api.options?.live_refresh_seconds || 5) * 1000);
 }
-function drawLive({ grid, solar, battery, soc, hasSolar, hasBattery, devs, dev }) {
+const LIVE_STALE_MS = 5 * 60e3;
+function fmtAge(ms) {
+  if (ms == null) return "";
+  if (ms < 60e3) return `${Math.round(ms / 1000)} s`;
+  if (ms < 3600e3) return `${Math.round(ms / 60e3)} min`;
+  return `${num(ms / 3600e3, 1)} uur`;
+}
+function drawLive({ grid, solar, battery, soc, hasSolar, hasBattery, devs, dev, freshness = { dev: {} } }) {
   const W = (v) => (Math.abs(v) >= 1000 ? `${num(v / 1000, 2)} kW` : `${num(v, 0)} W`);
   const hasGrid = grid != null;
   const f = hasGrid ? decompose({ fromGrid: clamp0(grid), toGrid: clamp0(-grid), solar, batOut: clamp0(battery), batIn: clamp0(-battery) }) : null;
@@ -1600,13 +1628,24 @@ function drawLive({ grid, solar, battery, soc, hasSolar, hasBattery, devs, dev }
   // Device rows (top-level first, children indented under their parent)
   let rows = [];
   const add = (d, depth) => {
-    rows.push({ d, depth, w: dev[d.id] || 0 });
+    rows.push({ d, depth, w: dev[d.id] || 0, fr: freshness.dev?.[d.id] });
     devs.filter((c) => c.parent === d.id).forEach((c) => add(c, depth + 1));
   };
   devs.filter((d) => !d.parent || !devs.some((x) => x.id === d.parent)).forEach((d) => add(d, 0));
   const topW = sum(rows.filter((r) => r.depth === 0), (r) => r.w);
   const homeW = hasGrid ? f.home : topW;
-  if (hasGrid && rows.length) rows.push({ d: null, depth: 0, w: clamp0(homeW - topW) });
+  // Devices can never use more than the whole home; if they do, the sensors disagree.
+  const mismatch = hasGrid && rows.length > 0 && topW - homeW > Math.max(40, 0.1 * homeW);
+  if (hasGrid && rows.length) rows.push({ d: null, depth: 0, w: clamp0(homeW - topW), unknown: mismatch });
+  const staleNames = [
+    ...(hasGrid && freshness.grid?.stale ? [["Net", freshness.grid.age]] : []),
+    ...(hasSolar && freshness.solar?.stale ? [["Zon", freshness.solar.age]] : []),
+    ...(hasBattery && freshness.battery?.stale ? [["Batterij", freshness.battery.age]] : []),
+    ...rows.filter((r) => r.fr?.stale).map((r) => [devName(r.d), r.fr.age]),
+  ];
+  const valText = (r) => (r.unknown ? "?" : W(r.w));
+  const staleText = (r) => (r.fr?.stale ? `⏱ ${fmtAge(r.fr.age)}` : "");
+  const ageTitle = (fr) => (fr?.age != null ? ` · laatste meting ${fmtAge(fr.age)} geleden` : "");
   const compact = $("#live-flow").clientWidth < 640 && hasGrid;
   const allRows = rows;
   if (compact) rows = [];
@@ -1628,8 +1667,8 @@ function drawLive({ grid, solar, battery, soc, hasSolar, hasBattery, devs, dev }
     const [x1, y1] = P[a], [x2, y2] = P[b];
     return flowPath(`M${x1},${y1} Q${(x1 + x2) / 2 + bend},${(y1 + y2) / 2 + bend} ${x2},${y2}`, val, color);
   };
-  const node = (k, label, value, color, sub = "") =>
-    `<g class="node" transform="translate(${P[k][0]},${P[k][1]})"><circle r="44" stroke="${color}"/><text class="t2" y="-10">${label}</text><text class="t1" y="9">${value}</text>${sub ? `<text class="t2" y="25">${sub}</text>` : ""}</g>`;
+  const node = (k, label, value, color, sub = "", fr = null) =>
+    `<g class="node" transform="translate(${P[k][0]},${P[k][1]})"><title>${label}: ${value}${ageTitle(fr)}</title><circle r="44" stroke="${color}"/><text class="t2" y="-10">${label}</text><text class="t1" y="9">${value}</text>${sub ? `<text class="t2" y="25">${sub}</text>` : ""}${fr?.stale ? `<text class="stale-t" y="62">⏱ ${fmtAge(fr.age)} geen update</text>` : ""}</g>`;
 
   let edges = "";
   if (hasGrid) {
@@ -1655,18 +1694,20 @@ function drawLive({ grid, solar, battery, soc, hasSolar, hasBattery, devs, dev }
     }
     if (r.d) parentY[r.d.id] = y;
     const name = r.d ? devName(r.d) : "Niet apart gemeten";
-    pills += `<g class="pill" transform="translate(${x},${y})"><title>${esc(name)}: ${W(r.w)}</title>
+    const tip = r.unknown ? `${name}: onbekend — de apparaten samen (${W(topW)}) verbruiken meer dan het huis (${W(homeW)})` : `${name}: ${W(r.w)}${ageTitle(r.fr)}`;
+    pills += `<g class="pill${r.fr?.stale ? " stale" : ""}" transform="translate(${x},${y})"><title>${esc(tip)}</title>
       <rect class="bg" width="${w}" height="28" rx="14"/>
       <rect width="${Math.max(0, (r.w / maxW) * (w - 4))}" height="24" x="2" y="2" rx="12" fill="${color}" opacity="0.22"/>
       <circle cx="16" cy="14" r="5" fill="${color}"/>
       <text x="28" y="15" class="${r.w < 3 ? "muted" : ""}">${esc(name.length > 30 ? name.slice(0, 29) + "…" : name)}</text>
-      <text x="${w - 12}" y="15" class="w ${r.w < 3 ? "muted" : ""}">${W(r.w)}</text></g>`;
+      ${r.fr?.stale ? `<text x="${w - 74}" y="15" class="w stale-t">${staleText(r)}</text>` : ""}
+      <text x="${w - 12}" y="15" class="w ${r.w < 3 && !r.unknown ? "muted" : ""}">${valText(r)}</text></g>`;
   });
   const nodes = [
-    hasGrid ? node("grid", "Net", W(Math.abs(grid)), css("--grid-in"), grid < -5 ? "teruglevering" : grid > 5 ? "afname" : "") : "",
+    hasGrid ? node("grid", "Net", W(Math.abs(grid)), css("--grid-in"), grid < -5 ? "teruglevering" : grid > 5 ? "afname" : "", freshness.grid) : "",
     node("home", "Thuis", W(homeW), css("--home"), hasGrid ? "" : "gemeten apparaten"),
-    hasGrid && hasSolar ? node("solar", "Zon", W(solar), css("--solar")) : "",
-    hasGrid && hasBattery ? node("battery", "Batterij", W(Math.abs(battery)), css("--battery"), soc != null && !isNaN(soc) ? `${num(soc, 0)}% · ${battery > 5 ? "ontladen" : battery < -5 ? "laden" : "rust"}` : "") : "",
+    hasGrid && hasSolar ? node("solar", "Zon", W(solar), css("--solar"), "", freshness.solar) : "",
+    hasGrid && hasBattery ? node("battery", "Batterij", W(Math.abs(battery)), css("--battery"), soc != null && !isNaN(soc) ? `${num(soc, 0)}% · ${battery > 5 ? "ontladen" : battery < -5 ? "laden" : "rust"}` : "", freshness.battery) : "",
   ].join("");
   let list = "";
   if (compact && allRows.length) {
@@ -1674,11 +1715,19 @@ function drawLive({ grid, solar, battery, soc, hasSolar, hasBattery, devs, dev }
     list = `<div class="device-list" style="max-height:none;margin-top:8px">${allRows
       .map((r) => {
         const color = r.d ? css(r.d.slot) : css("--other");
-        return `<div class="dev ${r.depth ? "child" : ""}"><span class="dot" style="background:${color}"></span><span class="name">${esc(r.d ? devName(r.d) : "Niet apart gemeten")}</span><span class="bar"><span style="width:${(r.w / mx) * 100}%;background:${color}"></span></span><span class="val">${W(r.w)}</span></div>`;
+        return `<div class="dev ${r.depth ? "child" : ""}"><span class="dot" style="background:${color}"></span><span class="name">${esc(r.d ? devName(r.d) : "Niet apart gemeten")}</span><span class="bar"><span style="width:${(r.w / mx) * 100}%;background:${color}"></span></span><span class="val">${r.fr?.stale ? `<small class="stale-t">${staleText(r)}</small> ` : ""}${valText(r)}</span></div>`;
       })
       .join("")}</div>`;
   }
-  $("#live-flow").innerHTML = `<svg viewBox="0 0 ${VBW} ${H}" role="img" aria-label="Live energiestroom per apparaat" style="max-height:${Math.max(340, H)}px;${compact ? "min-width:0" : ""}">${edges}${nodes}${pills}</svg>${list}`;
+  let warn = "";
+  if (mismatch || staleNames.length) {
+    const parts = [];
+    if (mismatch) parts.push(`De gemeten apparaten verbruiken samen <b>${W(topW)}</b>, meer dan het huis in totaal (<b>${W(homeW)}</b> = zon + net). Dat kan fysiek niet: de sensoren lopen niet gelijk of één ervan meet niet goed.`);
+    if (staleNames.length) parts.push(`Geen nieuwe meting in de laatste ${fmtAge(LIVE_STALE_MS)}: ${staleNames.map(([n, a]) => `<b>${esc(n)}</b> (${fmtAge(a)})`).join(", ")}.${mismatch ? " Dat is waarschijnlijk de oorzaak." : ""}`);
+    else if (mismatch) parts.push("Alle sensoren zijn recent bijgewerkt; controleer of de netsensor alle fasen meet en of apparaten niet dubbel geteld worden.");
+    warn = `<div class="live-warn" role="status"><span class="ico" aria-hidden="true">⚠</span><div><b>${mismatch ? "Metingen kloppen niet met elkaar" : "Verouderde meting"}</b><br>${parts.join(" ")}</div></div>`;
+  }
+  $("#live-flow").innerHTML = `${warn}<svg viewBox="0 0 ${VBW} ${H}" role="img" aria-label="Live energiestroom per apparaat" style="max-height:${Math.max(340, H)}px;${compact ? "min-width:0" : ""}">${edges}${nodes}${pills}</svg>${list}`;
 }
 
 /* =========================================================================

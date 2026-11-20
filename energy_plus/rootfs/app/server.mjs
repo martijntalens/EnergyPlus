@@ -249,6 +249,8 @@ async function handleApi(req, res, url) {
             unit: s.attributes?.unit_of_measurement || null,
             name: s.attributes?.friendly_name || id,
             last_updated: s.last_updated,
+            // last_reported (HA 2024.3+) also moves when a sensor re-reports the same value.
+            last_reported: s.last_reported || s.last_updated,
           };
         } catch {
           out[id] = null;
