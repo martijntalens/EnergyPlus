@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+- Live flow: the warning banner is removed; issues are only marked on the sensor itself
+  (⏱ with its age for stale sensors, "apparaten > huis ?" on *Niet apart gemeten* when the devices add up
+  to more than the home).
+
 ## 0.3.1
 - Live flow: warning when the measured devices together use more power than the whole
   home (solar + grid), instead of silently showing 0 W for "Niet apart gemeten" (now "?").

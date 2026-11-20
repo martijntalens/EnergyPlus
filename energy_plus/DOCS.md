@@ -64,9 +64,9 @@ device_power_entities:
 ### Sensor checks in the live view
 
 - If the devices together use more than the home in total (solar + grid − feed-in), the
-  sensors disagree. Energie+ shows a warning and "?" for *Niet apart gemeten*.
+  sensors disagree. Energie+ then shows "?" for *Niet apart gemeten* (hover for details).
 - A sensor that shows power (> 5 W) but has not reported for more than 5 minutes is
-  marked with ⏱ and its age (based on `last_reported`). Typical cause: cloud integrations
+  marked with ⏱ and its age on that node or device (based on `last_reported`). Typical cause: cloud integrations
   of inverters that update only every 5–15 minutes.
 - Other causes of a mismatch: a grid power sensor that measures one phase only, a sensor
   with an inverted sign, or devices counted twice (e.g. a group and its members).

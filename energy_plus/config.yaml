@@ -1,5 +1,5 @@
 name: Energie+
-version: "0.3.1"
+version: "0.3.2"
 slug: energy_plus
 description: Extra, more detailed energy dashboard next to the built-in Energy dashboard
 url: https://github.com/martijntalens/EnergyPlus

@@ -1637,12 +1637,6 @@ function drawLive({ grid, solar, battery, soc, hasSolar, hasBattery, devs, dev, 
   // Devices can never use more than the whole home; if they do, the sensors disagree.
   const mismatch = hasGrid && rows.length > 0 && topW - homeW > Math.max(40, 0.1 * homeW);
   if (hasGrid && rows.length) rows.push({ d: null, depth: 0, w: clamp0(homeW - topW), unknown: mismatch });
-  const staleNames = [
-    ...(hasGrid && freshness.grid?.stale ? [["Net", freshness.grid.age]] : []),
-    ...(hasSolar && freshness.solar?.stale ? [["Zon", freshness.solar.age]] : []),
-    ...(hasBattery && freshness.battery?.stale ? [["Batterij", freshness.battery.age]] : []),
-    ...rows.filter((r) => r.fr?.stale).map((r) => [devName(r.d), r.fr.age]),
-  ];
   const valText = (r) => (r.unknown ? "?" : W(r.w));
   const staleText = (r) => (r.fr?.stale ? `⏱ ${fmtAge(r.fr.age)}` : "");
   const ageTitle = (fr) => (fr?.age != null ? ` · laatste meting ${fmtAge(fr.age)} geleden` : "");
@@ -1695,12 +1689,13 @@ function drawLive({ grid, solar, battery, soc, hasSolar, hasBattery, devs, dev, 
     if (r.d) parentY[r.d.id] = y;
     const name = r.d ? devName(r.d) : "Niet apart gemeten";
     const tip = r.unknown ? `${name}: onbekend — de apparaten samen (${W(topW)}) verbruiken meer dan het huis (${W(homeW)})` : `${name}: ${W(r.w)}${ageTitle(r.fr)}`;
-    pills += `<g class="pill${r.fr?.stale ? " stale" : ""}" transform="translate(${x},${y})"><title>${esc(tip)}</title>
+    pills += `<g class="pill${r.fr?.stale || r.unknown ? " stale" : ""}" transform="translate(${x},${y})"><title>${esc(tip)}</title>
       <rect class="bg" width="${w}" height="28" rx="14"/>
       <rect width="${Math.max(0, (r.w / maxW) * (w - 4))}" height="24" x="2" y="2" rx="12" fill="${color}" opacity="0.22"/>
       <circle cx="16" cy="14" r="5" fill="${color}"/>
       <text x="28" y="15" class="${r.w < 3 ? "muted" : ""}">${esc(name.length > 30 ? name.slice(0, 29) + "…" : name)}</text>
       ${r.fr?.stale ? `<text x="${w - 74}" y="15" class="w stale-t">${staleText(r)}</text>` : ""}
+      ${r.unknown ? `<text x="${w - 30}" y="15" class="w stale-t">apparaten &gt; huis</text>` : ""}
       <text x="${w - 12}" y="15" class="w ${r.w < 3 && !r.unknown ? "muted" : ""}">${valText(r)}</text></g>`;
   });
   const nodes = [
@@ -1719,15 +1714,7 @@ function drawLive({ grid, solar, battery, soc, hasSolar, hasBattery, devs, dev, 
       })
       .join("")}</div>`;
   }
-  let warn = "";
-  if (mismatch || staleNames.length) {
-    const parts = [];
-    if (mismatch) parts.push(`De gemeten apparaten verbruiken samen <b>${W(topW)}</b>, meer dan het huis in totaal (<b>${W(homeW)}</b> = zon + net). Dat kan fysiek niet: de sensoren lopen niet gelijk of één ervan meet niet goed.`);
-    if (staleNames.length) parts.push(`Geen nieuwe meting in de laatste ${fmtAge(LIVE_STALE_MS)}: ${staleNames.map(([n, a]) => `<b>${esc(n)}</b> (${fmtAge(a)})`).join(", ")}.${mismatch ? " Dat is waarschijnlijk de oorzaak." : ""}`);
-    else if (mismatch) parts.push("Alle sensoren zijn recent bijgewerkt; controleer of de netsensor alle fasen meet en of apparaten niet dubbel geteld worden.");
-    warn = `<div class="live-warn" role="status"><span class="ico" aria-hidden="true">⚠</span><div><b>${mismatch ? "Metingen kloppen niet met elkaar" : "Verouderde meting"}</b><br>${parts.join(" ")}</div></div>`;
-  }
-  $("#live-flow").innerHTML = `${warn}<svg viewBox="0 0 ${VBW} ${H}" role="img" aria-label="Live energiestroom per apparaat" style="max-height:${Math.max(340, H)}px;${compact ? "min-width:0" : ""}">${edges}${nodes}${pills}</svg>${list}`;
+  $("#live-flow").innerHTML = `<svg viewBox="0 0 ${VBW} ${H}" role="img" aria-label="Live energiestroom per apparaat" style="max-height:${Math.max(340, H)}px;${compact ? "min-width:0" : ""}">${edges}${nodes}${pills}</svg>${list}`;
 }
 
 /* =========================================================================

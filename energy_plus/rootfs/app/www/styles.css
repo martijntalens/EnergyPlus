@@ -258,13 +258,10 @@ thead th { position: sticky; top: 0; background: var(--surface); color: var(--in
 .chip[hidden] { display: none; }
 
 /* ---------- live warnings ---------- */
-.live-warn { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; margin: 2px 0 10px; padding: 9px 12px; border-radius: 10px;
-  border: 1px solid color-mix(in srgb, #fab219 55%, transparent); border-left: 4px solid #fab219; background: color-mix(in srgb, #fab219 10%, var(--surface)); font-size: 12.5px; color: var(--ink); }
-.live-warn .ico { color: #c98500; font-size: 16px; line-height: 1.2; }
 .live-flow text.stale-t, .live-flow .stale-t { fill: #c98500; color: #c98500; font-size: 11px; font-weight: 600; }
 .live-flow .node text.stale-t { text-anchor: middle; }
 .live-flow .pill.stale rect.bg { stroke: #fab219; stroke-width: 1; stroke-dasharray: 3 3; }
 :root { --warn-ink: #8a5a00; }
 @media (prefers-color-scheme: dark) { :root:where(:not([data-theme="light"])) { --warn-ink: #e0a43a; } }
 :root[data-theme="dark"] { --warn-ink: #e0a43a; }
-.live-warn .ico, .live-flow text.stale-t, .live-flow .stale-t { fill: var(--warn-ink); color: var(--warn-ink); }
+.live-flow text.stale-t, .live-flow .stale-t { fill: var(--warn-ink); color: var(--warn-ink); }
