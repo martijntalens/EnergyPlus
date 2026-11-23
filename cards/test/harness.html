@@ -1,0 +1,44 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EnergyPlus cards test</title>
+<style>
+  :root { --primary-text-color:#141414; --secondary-text-color:#6f6f6f; --card-background-color:#fff; --ha-card-background:#fff; --divider-color:#e8e8e8; --secondary-background-color:#f4f4f2; --primary-background-color:#efefef; }
+  :root.dark { --primary-text-color:#e1e1e1; --secondary-text-color:#9b9b9b; --card-background-color:#1c1c1c; --ha-card-background:#1c1c1c; --divider-color:#2f2f2f; --secondary-background-color:#262626; --primary-background-color:#111; }
+  body { margin:0; padding:16px; background:var(--primary-background-color); font-family: Roboto, system-ui, sans-serif; color: var(--primary-text-color); }
+  ha-card { display:block; background:var(--card-background-color); border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.12); }
+  #wrap { display:grid; gap:16px; }
+</style></head>
+<body><div id="wrap"></div>
+<script type="module">
+import { createDemoApi } from '/energy_plus/rootfs/app/www/demo.js';
+customElements.define('ha-card', class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: 'open' }).innerHTML = '<style>:host{display:block;background:var(--ha-card-background);border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.12);color:var(--primary-text-color)}</style><slot></slot>'; } });
+const q = new URLSearchParams(location.search);
+const dark = q.get('theme') === 'dark';
+if (dark) document.documentElement.classList.add('dark');
+const api = createDemoApi();
+const DEVS = ['tv','wasmachine','droger','vaatwasser','koelkast','computer','werkplek','verlichting'];
+const powerIds = ['sensor.demo_grid_power','sensor.demo_solar_power', ...DEVS.map(d => `sensor.demo_${d}_power`)];
+const st = await api.states(powerIds);
+const now = Date.now();
+const states = {}, entities = {};
+for (const [id, s] of Object.entries(st)) {
+  if (!s) continue;
+  const stale = q.get('stale') && id === `sensor.demo_${q.get('stale')}_power`;
+  const ts = new Date(now - (stale ? 9 * 60e3 : 5e3)).toISOString();
+  states[id] = { entity_id: id, state: s.state, attributes: { unit_of_measurement: 'W', device_class: 'power', friendly_name: id }, last_updated: ts, last_reported: ts, last_changed: ts };
+}
+if (q.get('mismatch')) states['sensor.demo_verlichting_power'].state = '1200';
+for (const d of DEVS) { entities[`sensor.demo_${d}_energy`] = { entity_id: `sensor.demo_${d}_energy`, device_id: `dev_${d}` }; entities[`sensor.demo_${d}_power`] = { entity_id: `sensor.demo_${d}_power`, device_id: `dev_${d}` }; }
+const hass = { callWS: (m) => api.ws(m), states, entities, devices: {}, areas: {}, themes: { darkMode: dark }, locale: { language: q.get('lang') || 'nl' }, language: q.get('lang') || 'nl', config: { currency: 'EUR' }, connection: {} };
+const cards = (q.get('cards') || 'kpi,live-flow,devices,solar,costs,tariff,cycles').split(',');
+const extra = { 'live-flow': { grid_power: 'sensor.demo_grid_power', solar_power: 'sensor.demo_solar_power' } };
+for (const c of cards) {
+  await import(`/cards/dist/energyplus-${c}-card.js`);
+  const el = document.createElement(`energyplus-${c}-card`);
+  el.setConfig({ period: q.get('period') || undefined, ...(extra[c] || {}), ...(q.get('view') && c === 'devices' ? { view: q.get('view') } : {}) });
+  if (q.get('width')) el.style.maxWidth = q.get('width') + 'px';
+  document.getElementById('wrap').appendChild(el);
+  el.hass = hass;
+}
+window.__ready = true;
+</script></body></html>
