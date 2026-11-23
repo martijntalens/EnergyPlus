@@ -1,4 +1,4 @@
-/* Energie+ — light/dark tokens. Series colours validated for CVD separation. */
+/* EnergyPlus — light/dark tokens. Series colours validated for CVD separation. */
 :root {
   color-scheme: light;
   --page: #f4f4f1;
@@ -87,7 +87,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
   fill: #fff; background: linear-gradient(135deg, var(--solar), var(--battery) 55%, var(--grid-in));
 }
 .brand h1 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
-.brand h1 span { color: var(--solar); }
 .brand .sub { color: var(--ink-2); font-size: 12px; }
 .badge {
   font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 999px;

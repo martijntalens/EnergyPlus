@@ -1,10 +1,16 @@
-# Energie+ for Home Assistant
+# EnergyPlus for Home Assistant
 
 An **extra**, more detailed and more visual energy dashboard for Home Assistant — installed
 as a Home Assistant app (add-on) with its own sidebar panel. It sits next to the built-in
 Energy dashboard and reuses its configuration; nothing is replaced or changed.
 
-![Energie+ light](docs/screenshot-light.png)
+![EnergyPlus light](docs/screenshot-light.png)
+
+## Dashboard cards
+
+The parts of this dashboard are also available as separate cards for your own Home
+Assistant dashboards, in [energyplus-cards](https://github.com/martijntalens/energyplus-cards).
+The cards work without this app.
 
 ## Installation
 
@@ -12,13 +18,13 @@ Energy dashboard and reuses its configuration; nothing is replaced or changed.
 
 1. In Home Assistant: **Settings → Apps (Add-ons) → App store → ⋮ → Repositories**, add
    `https://github.com/martijntalens/EnergyPlus`.
-2. Install **Energie+**, start it and enable **Show in sidebar**.
+2. Install **EnergyPlus**, start it and enable **Show in sidebar**.
 
 ### Option B — local app
 
 1. Copy the `energy_plus` folder to the `/addons` share of your Home Assistant
    (e.g. via the *Samba share* or *Advanced SSH & Web Terminal* app).
-2. **Settings → Apps → App store → ⋮ → Check for updates**. Energie+ appears under
+2. **Settings → Apps → App store → ⋮ → Check for updates**. EnergyPlus appears under
    *Local apps*.
 3. Install, start, enable **Show in sidebar**.
 

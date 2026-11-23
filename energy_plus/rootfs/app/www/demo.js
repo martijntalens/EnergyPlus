@@ -1,6 +1,6 @@
 // Demo mode: a deterministic, synthetic Dutch household (gas + solar, no battery, no EV charging).
 // Used when the page is opened outside Home Assistant or with ?demo in the URL.
-// Mimics the subset of the HA WebSocket API that Energie+ uses.
+// Mimics the subset of the HA WebSocket API that EnergyPlus uses.
 
 const HOUR = 3600e3;
 const BAT_CAP = 10, BAT_MAX = 3, BAT_EFF = 0.95;

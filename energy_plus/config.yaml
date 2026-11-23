@@ -1,5 +1,5 @@
-name: Energie+
-version: "0.3.2"
+name: EnergyPlus
+version: "0.4.0"
 slug: energy_plus
 description: Extra, more detailed energy dashboard next to the built-in Energy dashboard
 url: https://github.com/martijntalens/EnergyPlus
@@ -12,7 +12,7 @@ boot: auto
 ingress: true
 ingress_port: 8099
 panel_icon: mdi:lightning-bolt-circle
-panel_title: Energie+
+panel_title: EnergyPlus
 homeassistant_api: true
 options:
   grid_power_entity: ""

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+- The app is now called **EnergyPlus** everywhere (app store, sidebar and page title),
+  in line with the EnergyPlus cards and ClimatePlus. The internal slug stays
+  `energy_plus`, so updating keeps your installation and settings.
+
 ## 0.3.2
 - Live flow: the warning banner is removed; issues are only marked on the sensor itself
   (⏱ with its age for stale sensors, "apparaten > huis ?" on *Niet apart gemeten* when the devices add up

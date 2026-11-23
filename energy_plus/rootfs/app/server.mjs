@@ -1,4 +1,4 @@
-// Energie+ — backend for the Home Assistant app (add-on).
+// EnergyPlus — backend for the Home Assistant app (add-on).
 //
 // Serves the dashboard over Ingress and relays a small, READ-ONLY set of
 // Home Assistant WebSocket commands. The Supervisor token never leaves this
@@ -340,6 +340,6 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  log(`Energie+ listening on :${PORT}${DEMO ? " (DEMO mode — no Home Assistant token)" : ""}`);
+  log(`EnergyPlus listening on :${PORT}${DEMO ? " (DEMO mode — no Home Assistant token)" : ""}`);
   if (ha) ha.connect().catch((e) => log("Initial HA connection failed:", e.message));
 });

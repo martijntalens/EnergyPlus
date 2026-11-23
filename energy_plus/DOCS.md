@@ -1,6 +1,6 @@
-# Energie+
+# EnergyPlus
 
-Energie+ adds an **extra** energy dashboard to the Home Assistant sidebar. It does not
+EnergyPlus adds an **extra** energy dashboard to the Home Assistant sidebar. It does not
 replace or change the built-in Energy dashboard: it reads the same configuration
 (*Settings → Dashboards → Energy*) and the same long-term statistics, and shows them in
 more detail.
@@ -40,11 +40,11 @@ All options are optional.
 | `device_power_entities` | Only when a device's power sensor is not found automatically. One entry per device: `energy_sensor=power_sensor`. |
 
 If the power sensors are configured in the Energy dashboard itself (newer HA versions),
-Energie+ picks them up automatically. Without a grid power sensor the live card is hidden.
+EnergyPlus picks them up automatically. Without a grid power sensor the live card is hidden.
 
 ### Live flow per device
 
-For every device in the Energy dashboard's *Individual devices* list, Energie+ looks for a
+For every device in the Energy dashboard's *Individual devices* list, EnergyPlus looks for a
 live power sensor (W/kW) in this order:
 
 1. The power sensor set for that device in the Energy settings (newer HA versions).
@@ -64,7 +64,7 @@ device_power_entities:
 ### Sensor checks in the live view
 
 - If the devices together use more than the home in total (solar + grid − feed-in), the
-  sensors disagree. Energie+ then shows "?" for *Niet apart gemeten* (hover for details).
+  sensors disagree. EnergyPlus then shows "?" for *Niet apart gemeten* (hover for details).
 - A sensor that shows power (> 5 W) but has not reported for more than 5 minutes is
   marked with ⏱ and its age on that node or device (based on `last_reported`). Typical cause: cloud integrations
   of inverters that update only every 5–15 minutes.

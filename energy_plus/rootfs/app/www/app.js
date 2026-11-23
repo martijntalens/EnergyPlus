@@ -1,4 +1,4 @@
-// Energie+ — frontend. Reads the Energy dashboard configuration and long-term
+// EnergyPlus — frontend. Reads the Energy dashboard configuration and long-term
 // statistics from Home Assistant (read-only) and renders a detailed dashboard.
 import { createDemoApi } from "./demo.js";
 
@@ -1126,7 +1126,7 @@ function renderBill(data) {
   $("#bill-period").textContent = w ? `${w.s.toLocaleDateString(LOCALE, { day: "numeric", month: "short", year: "numeric" })} – ${new Date(w.e - 864e5).toLocaleDateString(LOCALE, { day: "numeric", month: "short", year: "numeric" })}` : "";
   $("#chart-bill").hidden = true;
   if (!w || settings.monthly_payment == null) {
-    body.innerHTML = `<div class="empty">Vul via <b>Instellen</b> je termijnbedrag, vaste kosten en de start van je afrekenjaar in. Dan voorspelt Energie+ of je bij de jaarafrekening geld terugkrijgt of moet bijbetalen.</div>`;
+    body.innerHTML = `<div class="empty">Vul via <b>Instellen</b> je termijnbedrag, vaste kosten en de start van je afrekenjaar in. Dan voorspelt EnergyPlus of je bij de jaarafrekening geld terugkrijgt of moet bijbetalen.</div>`;
     return;
   }
   if (!model.hasCost && !model.gas.some((g) => g.cost)) {
@@ -1847,14 +1847,14 @@ async function init() {
   try {
     api = await createApi();
     $("#demo-badge").hidden = !api.demo;
-    if (api.demo) banner("Je bekijkt <b>demo-data</b>. Installeer Energie+ als Home Assistant-app om je eigen gegevens te zien.", true);
+    if (api.demo) banner("Je bekijkt <b>demo-data</b>. Installeer EnergyPlus als Home Assistant-app om je eigen gegevens te zien.", true);
     haConfig = await api.ws({ type: "get_config" }).catch(() => ({}));
     CURRENCY = haConfig.currency || "EUR";
     if (haConfig.location_name) $("#location").textContent = haConfig.location_name;
     const [prefs, info] = await Promise.all([api.ws({ type: "energy/get_prefs" }).catch(() => null), api.ws({ type: "energy/info" }).catch(() => ({}))]);
     if (!prefs || !(prefs.energy_sources || []).length) {
       loading(false);
-      banner("Het Energie-dashboard van Home Assistant is nog niet ingericht. Stel eerst je bronnen in via <b>Instellingen → Dashboards → Energie</b>; Energie+ gebruikt diezelfde configuratie.");
+      banner("Het Energie-dashboard van Home Assistant is nog niet ingericht. Stel eerst je bronnen in via <b>Instellingen → Dashboards → Energie</b>; EnergyPlus gebruikt diezelfde configuratie.");
       return;
     }
     model = buildModel(prefs, info);
