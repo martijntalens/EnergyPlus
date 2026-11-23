@@ -33,7 +33,7 @@ const hass = { callWS: (m) => api.ws(m), states, entities, devices: {}, areas: {
 const cards = (q.get('cards') || 'kpi,live-flow,devices,solar,costs,tariff,cycles').split(',');
 const extra = { 'live-flow': { grid_power: 'sensor.demo_grid_power', solar_power: 'sensor.demo_solar_power' } };
 for (const c of cards) {
-  await import(`/cards/dist/energyplus-${c}-card.js`);
+  await import('/cards/dist/energyplus-cards.js');
   const el = document.createElement(`energyplus-${c}-card`);
   el.setConfig({ period: q.get('period') || undefined, ...(extra[c] || {}), ...(q.get('view') && c === 'devices' ? { view: q.get('view') } : {}) });
   if (q.get('width')) el.style.maxWidth = q.get('width') + 'px';

@@ -1,39 +1,41 @@
-// Builds one self-contained JavaScript file per EnergyPlus card (no dependencies):
-//   node build.mjs            -> cards/dist/<tag>.js
-// Each card lives in its own GitHub repository; copy dist/<tag>.js to <repo>/dist/.
+// Builds dist/energyplus-cards.js: one self-contained file (no dependencies) with all
+// EnergyPlus dashboard cards. Published in https://github.com/martijntalens/energyplus-cards
+//   node build.mjs
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 export const CARDS = [
-  { tag: "energyplus-kpi-card", src: "kpi.js", title: "EnergyPlus key figures card" },
-  { tag: "energyplus-live-flow-card", src: "live.js", title: "EnergyPlus live energy flow card" },
-  { tag: "energyplus-devices-card", src: "devices.js", title: "EnergyPlus devices card" },
-  { tag: "energyplus-solar-card", src: "solar.js", title: "EnergyPlus solar card" },
-  { tag: "energyplus-costs-card", src: "costs.js", title: "EnergyPlus costs card" },
-  { tag: "energyplus-tariff-card", src: "tariff.js", title: "EnergyPlus off-peak and peak card" },
-  { tag: "energyplus-cycles-card", src: "cycles.js", title: "EnergyPlus appliance cycles card" },
+  { tag: "energyplus-kpi-card", src: "kpi.js", title: "Key figures" },
+  { tag: "energyplus-live-flow-card", src: "live.js", title: "Live energy flow" },
+  { tag: "energyplus-devices-card", src: "devices.js", title: "Devices" },
+  { tag: "energyplus-solar-card", src: "solar.js", title: "Solar" },
+  { tag: "energyplus-costs-card", src: "costs.js", title: "Costs" },
+  { tag: "energyplus-tariff-card", src: "tariff.js", title: "Off-peak and peak" },
+  { tag: "energyplus-cycles-card", src: "cycles.js", title: "Appliance cycles" },
 ];
 const VERSION = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).version;
 const core = fs.readFileSync(path.join(dir, "src/core.js"), "utf8").replace("__VERSION__", VERSION);
-fs.mkdirSync(path.join(dir, "dist"), { recursive: true });
-for (const c of CARDS) {
-  const body = fs.readFileSync(path.join(dir, "src", c.src), "utf8");
-  const out = `/*
- * ${c.title} for Home Assistant dashboards — v${VERSION}
- * Part of EnergyPlus: https://github.com/martijntalens/EnergyPlus
+const bodies = CARDS.map((c) => `/* ---------------- ${c.tag} ---------------- */\n` + fs.readFileSync(path.join(dir, "src", c.src), "utf8")).join("\n");
+const out = `/*
+ * EnergyPlus cards for Home Assistant dashboards — v${VERSION}
+ * ${CARDS.map((c) => `custom:${c.tag}`).join("\n * ")}
+ *
+ * https://github.com/martijntalens/energyplus-cards — part of https://github.com/martijntalens/EnergyPlus
  * Reads the Energy dashboard configuration and statistics of Home Assistant.
  * Read-only, no external requests. Generated file — edit cards/src in the EnergyPlus repository.
- *
- *   type: custom:${c.tag}
  */
 (() => {
 'use strict';
+if (window.__energyplusCardsLoaded) return;
+window.__energyplusCardsLoaded = true;
 ${core}
-${body}
+${bodies}
+console.info('%c ENERGYPLUS-CARDS %c ${VERSION} ', 'color:#fff;background:#eda100;font-weight:700', 'color:#eda100;background:transparent');
 })();
 `;
-  fs.writeFileSync(path.join(dir, "dist", `${c.tag}.js`), out);
-  console.log(`dist/${c.tag}.js  ${(out.length / 1024).toFixed(1)} kB`);
-}
+fs.mkdirSync(path.join(dir, "dist"), { recursive: true });
+for (const f of fs.readdirSync(path.join(dir, "dist"))) fs.rmSync(path.join(dir, "dist", f));
+fs.writeFileSync(path.join(dir, "dist", "energyplus-cards.js"), out);
+console.log(`dist/energyplus-cards.js  ${(out.length / 1024).toFixed(1)} kB, ${CARDS.length} cards`);

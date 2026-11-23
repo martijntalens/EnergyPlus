@@ -1,12 +1,12 @@
-// Generates the content of each card repository (dist, hacs.json, README, CI, licence):
+// Generates the content of the energyplus-cards repository (dist, hacs.json, README, CI, licence):
 //   node build.mjs && node make-repos.mjs <output-folder>
-// Screenshots are added separately to <output-folder>/<tag>/images/.
+// Screenshots are added separately to <output-folder>/images/<card>-light.png / -dark.png.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
-const out = path.resolve(process.argv[2] || path.join(dir, "repos"));
+const out = path.resolve(process.argv[2] || path.join(dir, "repo"));
 const VERSION = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).version;
 const LICENSE = fs.readFileSync(path.join(dir, "..", "LICENSE"), "utf8");
 
@@ -89,7 +89,9 @@ devices:                         # optional: which Energy dashboard devices (ene
   },
 ];
 
-const ci = (tag) => `name: CI
+const REPO = "energyplus-cards";
+const short = (tag) => tag.replace(/^energyplus-|-card$/g, "");
+const ci = `name: CI
 
 on:
   push:
@@ -99,8 +101,8 @@ permissions:
   contents: read
 
 jobs:
-  card:
-    name: Card
+  cards:
+    name: Cards
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -108,7 +110,7 @@ jobs:
         with:
           node-version: "22"
       - name: Check JavaScript syntax
-        run: node --check dist/${tag}.js
+        run: node --check dist/${REPO}.js
       - name: Check hacs.json
         run: |
           node -e '
@@ -119,48 +121,16 @@ jobs:
             console.log("ok");
           '
 `;
+const img = (c, theme) => `https://raw.githubusercontent.com/martijntalens/${REPO}/main/images/${short(c.tag)}-${theme}.png`;
+const section = (c) => `## ${c.pick.replace(/^EnergyPlus /, "").replace(/^./, (x) => x.toUpperCase())}
 
-const readme = (c) => `# ${c.name}
+\`type: custom:${c.tag}\`
 
 ${c.intro}
 
 | Light theme | Dark theme |
 |---|---|
-| ![${c.name}, light theme](https://raw.githubusercontent.com/martijntalens/${c.tag}/main/images/screenshot-light.png) | ![${c.name}, dark theme](https://raw.githubusercontent.com/martijntalens/${c.tag}/main/images/screenshot-dark.png) |
-
-*Sample data.*
-
-The card is part of the [EnergyPlus](https://github.com/martijntalens/EnergyPlus)
-project, but works on its own: the EnergyPlus app does not need to be installed or
-running. It uses the configuration of the Home Assistant **Energy dashboard**
-(*Settings → Dashboards → Energy*), so set that up first.
-
-## Installation
-
-### Marketplace (formerly HACS) — recommended
-
-1. In Home Assistant open **Marketplace** and choose **Add from a GitHub link**.
-2. Enter \`https://github.com/martijntalens/${c.tag}\` and click **Add**.
-3. Find **${c.name}**, download it and reload the browser when asked.
-
-On an older HACS version: open **⋮ → Custom repositories**, add the same link
-with type **Dashboard**, then download the card.
-
-### Manual
-
-1. Download [\`dist/${c.tag}.js\`](dist/${c.tag}.js) and copy it to the \`www\`
-   folder in your Home Assistant configuration folder.
-2. Go to **Settings → Dashboards → ⋮ → Resources → Add resource**, enter
-   \`/local/${c.tag}.js\` and choose **JavaScript module**.
-3. Reload the browser.
-
-## Usage
-
-Edit a dashboard, **Add card** and pick **${c.pick}**, or add it in YAML:
-
-\`\`\`yaml
-type: custom:${c.tag}
-\`\`\`
+| ![${c.pick}, light theme](${img(c, "light")}) | ![${c.pick}, dark theme](${img(c, "dark")}) |
 
 All options are optional:
 
@@ -170,41 +140,82 @@ ${c.options}
 \`\`\`
 
 ${c.notes}
-${c.noPeriod ? "" : `
+`;
+const readme = `# EnergyPlus cards
+
+Seven Home Assistant dashboard cards that show your energy use in more detail than the
+built-in Energy dashboard — in one download:
+
+| Card | Type |
+|---|---|
+${CARDS.map((c) => `| [${c.pick.replace(/^EnergyPlus /, "").replace(/^./, (x) => x.toUpperCase())}](#${c.pick.replace(/^EnergyPlus /, "").toLowerCase().replace(/[^a-z0-9]+/g, "-")}) | \`custom:${c.tag}\` |`).join("\n")}
+
+*Screenshots show sample data.*
+
+The cards are part of the [EnergyPlus](https://github.com/martijntalens/EnergyPlus)
+project, but work on their own: the EnergyPlus app does not need to be installed or
+running. They use the configuration of the Home Assistant **Energy dashboard**
+(*Settings → Dashboards → Energy*), so set that up first.
+
+## Installation
+
+### Marketplace (formerly HACS) — recommended
+
+1. In Home Assistant open **Marketplace** and choose **Add from a GitHub link**.
+2. Enter \`https://github.com/martijntalens/${REPO}\` and click **Add**.
+3. Find **EnergyPlus cards**, download it and reload the browser when asked.
+
+On an older HACS version: open **⋮ → Custom repositories**, add the same link with type
+**Dashboard**, then download.
+
+### Manual
+
+1. Download [\`dist/${REPO}.js\`](dist/${REPO}.js) and copy it to the \`www\` folder in
+   your Home Assistant configuration folder.
+2. Go to **Settings → Dashboards → ⋮ → Resources → Add resource**, enter
+   \`/local/${REPO}.js\` and choose **JavaScript module**.
+3. Reload the browser.
+
+## Usage
+
+Edit a dashboard, **Add card** and search for **EnergyPlus**. Every card has a visual
+editor; the YAML options are listed per card below.
+
 ### Period
 
-Each card has its own period buttons (day, week, month, year) and ‹ › to step back
-in time. With \`energy_date_selection: true\` the card follows the date picker of
-the Energy dashboard instead (add the *Energy date picker* card to the same
-dashboard). This uses the energy data of the Home Assistant frontend, which is not
-an official interface for custom cards; if it stops working, the card falls back to
-its own period buttons.
-`}
-The card follows the language of your Home Assistant (Dutch or English) and its
-light or dark theme.
+The period cards have their own buttons (day, week, month, year) and ‹ › to step back
+in time. With \`energy_date_selection: true\` a card follows the date picker of the
+Energy dashboard instead (add the *Energy date picker* card to the same dashboard).
+This uses the energy data of the Home Assistant frontend, which is not an official
+interface for custom cards; if it is not available, the card uses its own buttons.
+
+Several EnergyPlus cards on one dashboard share the data they load.
+
+${CARDS.map(section).join("\n")}
+## Language and theme
+
+The cards follow the language of your Home Assistant (Dutch or English) and its light
+or dark theme.
 
 ## Privacy
 
-The card only reads the Energy dashboard configuration, long-term statistics and
-entity states through your own Home Assistant connection. It makes no external
-requests and changes nothing in Home Assistant.
+The cards only read the Energy dashboard configuration, long-term statistics and entity
+states through your own Home Assistant connection. They make no external requests and
+change nothing in Home Assistant.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
 `;
 
-for (const c of CARDS) {
-  const r = path.join(out, c.tag);
-  fs.mkdirSync(path.join(r, "dist"), { recursive: true });
-  fs.mkdirSync(path.join(r, "images"), { recursive: true });
-  fs.mkdirSync(path.join(r, ".github", "workflows"), { recursive: true });
-  fs.copyFileSync(path.join(dir, "dist", `${c.tag}.js`), path.join(r, "dist", `${c.tag}.js`));
-  fs.writeFileSync(path.join(r, "hacs.json"), JSON.stringify({ name: c.name, filename: `${c.tag}.js`, homeassistant: "2024.8.0", render_readme: true }, null, 2) + "\n");
-  fs.writeFileSync(path.join(r, "README.md"), readme(c));
-  fs.writeFileSync(path.join(r, "LICENSE"), LICENSE);
-  fs.writeFileSync(path.join(r, ".gitattributes"), "* text=auto eol=lf\n*.png binary\n");
-  fs.writeFileSync(path.join(r, ".gitignore"), ".DS_Store\nThumbs.db\n.idea/\n.vscode/\nnode_modules/\n");
-  fs.writeFileSync(path.join(r, ".github", "workflows", "ci.yaml"), ci(c.tag));
-  console.log(`${c.tag}  v${VERSION}`);
-}
+fs.mkdirSync(path.join(out, "dist"), { recursive: true });
+fs.mkdirSync(path.join(out, "images"), { recursive: true });
+fs.mkdirSync(path.join(out, ".github", "workflows"), { recursive: true });
+fs.copyFileSync(path.join(dir, "dist", `${REPO}.js`), path.join(out, "dist", `${REPO}.js`));
+fs.writeFileSync(path.join(out, "hacs.json"), JSON.stringify({ name: "EnergyPlus cards", filename: `${REPO}.js`, homeassistant: "2024.8.0", render_readme: true }, null, 2) + "\n");
+fs.writeFileSync(path.join(out, "README.md"), readme);
+fs.writeFileSync(path.join(out, "LICENSE"), LICENSE);
+fs.writeFileSync(path.join(out, ".gitattributes"), "* text=auto eol=lf\n*.png binary\n");
+fs.writeFileSync(path.join(out, ".gitignore"), ".DS_Store\nThumbs.db\n.idea/\n.vscode/\nnode_modules/\n");
+fs.writeFileSync(path.join(out, ".github", "workflows", "ci.yaml"), ci);
+console.log(`${REPO}  v${VERSION}, ${CARDS.length} cards`);

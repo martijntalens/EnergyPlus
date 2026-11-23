@@ -4,6 +4,7 @@
  * the Home Assistant connection of the logged-in user. Read-only.
  * ==================================================================== */
 const EP_VERSION = '__VERSION__';
+const EP_REPO = 'https://github.com/martijntalens/energyplus-cards';
 
 /* ---------- i18n ---------- */
 const TEXT = {
@@ -830,6 +831,5 @@ function registerCard(tag, cls, name, description) {
   if (!customElements.get(tag)) customElements.define(tag, cls);
   window.customCards = window.customCards || [];
   if (!window.customCards.some((c) => c.type === tag))
-    window.customCards.push({ type: tag, name, description, preview: true, documentationURL: `https://github.com/martijntalens/${tag}` });
-  console.info(`%c ${tag.toUpperCase()} %c ${EP_VERSION} `, 'color:#fff;background:#eda100;font-weight:700', 'color:#eda100;background:transparent');
+    window.customCards.push({ type: tag, name, description, preview: true, documentationURL: EP_REPO });
 }
